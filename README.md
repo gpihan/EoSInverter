@@ -11,7 +11,8 @@ Open a terminal and write:
 
 git clone https://github.com/gpihan/EoSInverter.git
 
-# Step 2: Change the relevant parameters in parameters.py
+
+# Step 2: Change the relevant parameters
 
 Essentially, modify the dimension under "Dimension"
 The location of the EoS table under "EoSTable"
@@ -23,7 +24,7 @@ be output.
 In the EoSInverter folder write 
 python3 PostProcessor.py [OutputFolder] parameters.py
 
-# Step 4: Analyze the inverted table. 
+# Step 4: Analyze the inverted table 
 
 You get several files all shaped in the 
 same way:
