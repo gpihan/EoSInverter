@@ -11,11 +11,15 @@ Open a terminal and write:
 
 git clone https://github.com/gpihan/EoSInverter.git
 
-# Step 2: Change the relevant parameters
+# Step 2: Change the relevant parameters and run the code
 
 Essentially, modify the dimension under "Dimension"\
 The location of the EoS table under "EoSTable"\
 The output folder where you want the inverted EoS table to be output.
+
+To run the code: 
+
+python3 EoSInverter parameters.py
 
 # Step 3: Proceed to post process
 
