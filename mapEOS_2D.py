@@ -14,7 +14,7 @@ import pickle
 import random
 import struct
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from utils import read_parameters
+from utils import read_parameters, readTable
 
 def key(iT, ib, Nb=5):
     return  iT*Nb + ib
@@ -181,9 +181,18 @@ if __name__ == "__main__":
     N_CORES = Param["Number_of_cores"] 
     RunMode = Param["RunMode"]
 
+    if Param["AutoSetBoundaries"]:
+        f = open('boundaries_temp.dat', 'rb')
+        Boundaries = pickle.load(f)
+        TILDE_BOUNDARIES = [Boundaries["Ttilde"], Boundaries["muBtilde"]]
+     else:
+        TILDE_BOUNDARIES = [Param["Ttilde"], Param["muBtilde"], Param["muQtilde"], Param["muStilde"]]
+
+
     hbarC = 0.19733
 
-    eos_table = np.loadtxt(EoS_table_file)
+    #eos_table = np.loadtxt(EoS_table_file)
+    eos_table = readTable(EoS_table_file)
     Thermodynamic_quantities = ["T", "MUB", "MUQ"]
     Dynamic_quantities = ["e", "nB", "nQ"]
     Press_Entro = ["P", "S"]
@@ -207,8 +216,6 @@ if __name__ == "__main__":
     INTERP_PS = {Quantity_name:interpolate.RegularGridInterpolator(GRID, PS_TABLES[Quantity_name], bounds_error=False, fill_value=None) for Quantity_name in Press_Entro}
 
     META_PARAMS = {"ACCURACY":ACCURACY, "MAXITER":MAXITER, "MINS":MINS, "MAXS":MAXS, "INTERP_PS":INTERP_PS}
-
-    TILDE_BOUNDARIES = [Param["Ttilde"], Param["muBtilde"], Param["muQtilde"], Param["muStilde"]]
 
     TILDE_TABLES = {Quantity:fill_TILDE(DATA) for Quantity, DATA in zip(Thermodynamic_quantities, TILDE_BOUNDARIES)}
 

@@ -3,6 +3,7 @@ import numpy as np
 import struct
 import sys
 from utils import read_parameters
+import pickle
 
 def fill_TILDE(DATA):
     d = {}
@@ -37,7 +38,15 @@ except:
     sys.exit()
 
 Param = read_parameters(param_path)
-TILDE_BOUNDARIES = [Param["Ttilde"], Param["muBtilde"], Param["muQtilde"], Param["muStilde"]]
+
+if Param["AutoSetBoundaries"]:
+    with open('boundaries_temp.dat', 'rb') as f:
+        Boundaries = pickle.load(f)
+    BOUNDS = Boundaries
+else:
+    BOUNDS = Param
+
+TILDE_BOUNDARIES = [BOUNDS["Ttilde"], BOUNDS["muBtilde"], BOUNDS["muQtilde"], BOUNDS["muStilde"]]
 TILDE_TABLES = {Quantity:fill_TILDE(DATA) for Quantity, DATA in zip(Thermodynamic_quantities, TILDE_BOUNDARIES)}
 
 here = output_folder
@@ -45,7 +54,7 @@ h_, F, f = next(os.walk(here))
 FNAMES = ["t", "mub", "muq", "mus", "p", "s"]
 header = write_header(TILDE_TABLES) 
 
-NT = Param["Ttilde"][2] 
+NT = BOUNDS["Ttilde"][2] 
 for i in range(NT): 
     print("Treating case : ", i)
     DATA = np.loadtxt(here+"/TEMP_unordered_inversion_"+str(i)+".dat")
@@ -72,3 +81,4 @@ os.system("mv "+output_folder+"/TEMP_unordered_inversion_* "+output_folder+"/RAW
 os.system("rm -rf JobArray*")
 os.system("rm -rf output*")
 os.system("rm -rf errors*")
+os.system("rm -rf boundaries_temp.dat")
