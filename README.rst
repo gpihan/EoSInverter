@@ -9,7 +9,8 @@ that will be public at https://github.com/gpihan/EoS-TrENsMUTher
 Step 1: Download the code
 =========================
 Open a terminal and write::
-git clone https://github.com/gpihan/EoSInverter.git
+
+   git clone https://github.com/gpihan/EoSInverter.git
 
 Create Python virtual environment::
 
@@ -53,9 +54,8 @@ To run the code::
 Step 3: Proceed to post process
 ==============================================
 In the EoSInverter folder writ::
+
     python3 PostProcessor.py [OutputFolder] parameters.py
-
-
 
 Contribution guidelines
 =======================
