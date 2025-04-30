@@ -223,7 +223,7 @@ if __name__ == "__main__":
     MAXS = [TMU_TABLES[Quantity]["MAX"] for Quantity in Thermodynamic_quantities]
 
     # EN in GeV**powers
-    EN_powers = [1.0, 1.0]
+    EN_powers = [4.0, 3.0]
     # reshape Temperature
 
     NT, NB = (TMU_TABLES[Q]["n"] for Q in Thermodynamic_quantities)
