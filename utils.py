@@ -118,9 +118,7 @@ def SetBoundaries(EoS_path, dim):
     T = EOS[:, 0]
     # To do: Check if user wants normalization ------
     exponents = [4] + [3] * (dim - 1)
-    print(f"exponents: {exponents}")
     scaling_factors = np.column_stack([T**p for p in exponents])
-    print(f"scaling_factors: {scaling_factors}")
     dynVars = EOS[:, dim : 2 * dim] * scaling_factors
     Tildes = GetTilde(dynVars, dim)
     return np.array([[np.min(Tildes[:, i]), np.max(Tildes[:, i])] for i in range(dim)])
