@@ -29,6 +29,7 @@ def write_header(TILDE_TABLES, dimension):
     return header
 
 
+# Argumenty skriptu
 try:
     output_folder = sys.argv[1]
     param_path = sys.argv[2]
@@ -36,9 +37,11 @@ except IndexError:
     print("Usage: PostProcessor.py output_folder param_path")
     sys.exit(1)
 
+# Načti parametry
 Param = read_parameters(param_path)
 dimension = Param.get("Dimension", 1)
 
+# Mapování dimenzí na veličiny
 dim_map = {
     1: ["T"],
     2: ["T", "MUB"],
@@ -46,7 +49,6 @@ dim_map = {
     4: ["T", "MUB", "MUQ", "MUS"],
 }
 Thermodynamic_quantities = dim_map.get(dimension, ["T", "MUB"])
-
 
 if Param.get("AutoSetBoundaries", False):
     with open("boundaries_temp.dat", "rb") as f:
@@ -62,27 +64,35 @@ TILDE_TABLES = {
 
 header = write_header(TILDE_TABLES, dimension)
 NT = TILDE_TABLES["T"]["n"] if "T" in TILDE_TABLES else 1
-FNAMES = ["t", "mub", "p", "s"]
+
+FNAMES = ["e", "nb", "t", "mub", "p", "s"]
+COLUMN_MAP = {
+    "e": 0,      
+    "nb": 1,    
+    "t": 2,     
+    "mub": 3,    
+    "p": 4,     
+    "s": 5,      
+}
 
 for i in range(NT):
     print(f"Treating case: {i}")
     file_path = os.path.join(output_folder, f"TEMP_unordered_inversion_{i}.dat")
     DATA = np.loadtxt(file_path)
-    DATA = DATA[np.argsort(DATA[:, -1])]
+    DATA = DATA[np.argsort(DATA[:, -1])] 
 
     mode = "wb" if i == 0 else "ab"
-    for j, fname in enumerate(FNAMES):
+    for fname in FNAMES:
+        col_index = COLUMN_MAP[fname]
         with open(f"EoS_{fname}_b.dat", mode) as f:
             if i == 0:
                 for h in header:
                     f.write(struct.pack("f", h))
-            for val in DATA[:, j]:
+            for val in DATA[:, col_index]:
                 f.write(struct.pack("f", val))
-
 
 for fn in FNAMES:
     shutil.move(f"EoS_{fn}_b.dat", output_folder)
-
 
 raw_data_dir = os.path.join(output_folder, "RAW_DATA")
 os.makedirs(raw_data_dir, exist_ok=True)

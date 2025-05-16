@@ -173,7 +173,7 @@ def invert_EOS_tables(
         T_local, muB_local = binary_search_2d(EN, INTERP, TMU_TABLES, MTP)
 
     (P_local, s_local) = (f([T_local, muB_local])[0] for f in MTP["INTERP_PS"].values())
-    return [T_local, muB_local, P_local, s_local, int(hyper_index)]
+    return [EN[0],EN[1],T_local, muB_local, P_local, s_local, int(hyper_index)]
 
 
 if __name__ == "__main__":
