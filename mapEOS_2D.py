@@ -158,7 +158,7 @@ def binary_search_2d(EN, INTERP, TMU_TABLES, MTP):
 
 
 def invert_EOS_tables(
-    T_ID, Ttilde, iBt, TILDE_TABLES, TMU_TABLES, INTERP, MTP, guessSol=[0.05, 0.0]
+    T_ID, Ttilde, iBt, TILDE_TABLES, TMU_TABLES, INTERP, MTP, hydro_model, guessSol=[0.05, 0.0]
 ):
     mbtilde = TILDE_TABLES["MUB"]["Arr"][iBt]
     hyper_index = key(T_ID, iBt, Nb=TILDE_TABLES["MUB"]["n"])
@@ -173,7 +173,12 @@ def invert_EOS_tables(
         T_local, muB_local = binary_search_2d(EN, INTERP, TMU_TABLES, MTP)
 
     (P_local, s_local) = (f([T_local, muB_local])[0] for f in MTP["INTERP_PS"].values())
-    return [EN[0],EN[1],T_local, muB_local, P_local, s_local, int(hyper_index)]
+    if "vHLLE" == hydro_model:
+        return [EN[0],EN[1],T_local, muB_local, P_local, s_local, int(hyper_index)]
+    elif "MUSIC" == hydro_model:
+        return [T_local, muB_local, P_local, s_local, int(hyper_index)]
+    else:
+        raise ValueError("Unknown hydro model: {}".format(hydro_model))
 
 
 if __name__ == "__main__":
@@ -196,6 +201,7 @@ if __name__ == "__main__":
     MAXITER = Param["MAXITER"]
     N_CORES = Param["Number_of_cores"]
     RunMode = Param["RunMode"]
+    hydro_model = Param["hydro_model"]  
 
     if Param["AutoSetBoundaries"]:
         f = open("boundaries_temp.dat", "rb")
@@ -280,6 +286,7 @@ if __name__ == "__main__":
                 TMU_TABLES,
                 INTERP,
                 META_PARAMS,
+                hydro_model,
             ): (iBt)
             for iBt in B_combinations
         }

@@ -6,7 +6,6 @@ import pickle
 import shutil
 from utils import read_parameters
 
-
 def fill_TILDE(DATA):
     d = {}
     d["n"] = DATA[2]
@@ -17,38 +16,28 @@ def fill_TILDE(DATA):
     return d
 
 
-def write_header(TILDE_TABLES, dimension):
-    keys = ["T", "MUB", "MUQ", "MUS"]
+def write_header(tables, quantities):
     header = []
-    for key in keys:
-        if key in TILDE_TABLES:
-            d = TILDE_TABLES[key]
-            header.extend([d["MIN"], d["d"], d["n"]])
-        else:
-            header.extend([0.0, 0.0, 1])
+    for q in quantities:
+        d = tables[q]
+        header.extend([d["MIN"], d["d"], d["n"]])
     return header
 
 
-# Argumenty skriptu
 try:
-    output_folder = sys.argv[1]
+    target_folder = sys.argv[1]
     param_path = sys.argv[2]
 except IndexError:
     print("Usage: PostProcessor.py output_folder param_path")
     sys.exit(1)
 
-# Načti parametry
 Param = read_parameters(param_path)
-dimension = Param.get("Dimension", 1)
+dimension = Param["Dimension"]
+solver = Param["hydro_model"]
 
-# Mapování dimenzí na veličiny
-dim_map = {
-    1: ["T"],
-    2: ["T", "MUB"],
-    3: ["T", "MUB", "MUQ"],
-    4: ["T", "MUB", "MUQ", "MUS"],
-}
-Thermodynamic_quantities = dim_map.get(dimension, ["T", "MUB"])
+dim_map = {1: ["T"], 2: ["T", "MUB"], 3: ["T", "MUB", "MUQ"], 4: ["T", "MUB", "MUQ", "MUS"]}
+Thermo = dim_map.get(dimension, ["T", "MUB"])
+quantity_keys = {"T": "Ttilde", "MUB": "muBtilde", "MUQ": "muQtilde", "MUS": "muStilde"}
 
 if Param.get("AutoSetBoundaries", False):
     with open("boundaries_temp.dat", "rb") as f:
@@ -56,53 +45,67 @@ if Param.get("AutoSetBoundaries", False):
 else:
     BOUNDS = Param
 
-quantity_keys = {"T": "Ttilde", "MUB": "muBtilde", "MUQ": "muQtilde", "MUS": "muStilde"}
-TILDE_BOUNDARIES = [BOUNDS[quantity_keys[q]] for q in Thermodynamic_quantities]
-TILDE_TABLES = {
-    q: fill_TILDE(data) for q, data in zip(Thermodynamic_quantities, TILDE_BOUNDARIES)
-}
 
-header = write_header(TILDE_TABLES, dimension)
-NT = TILDE_TABLES["T"]["n"] if "T" in TILDE_TABLES else 1
+tilde_bounds = [BOUNDS[quantity_keys[q]] for q in Thermo]
+TILDE = {q: fill_TILDE(data) for q, data in zip(Thermo, tilde_bounds)}
 
-FNAMES = ["e", "nb", "t", "mub", "p", "s"]
-COLUMN_MAP = {
-    "e": 0,      
-    "nb": 1,    
-    "t": 2,     
-    "mub": 3,    
-    "p": 4,     
-    "s": 5,      
-}
+if solver == "MUSIC":
+    fields = ["t", "mub", "p", "s"]
+    COL = {"t": 0, "mub": 1, "p": 2, "s": 3}
+elif solver == "vHLLE":
+    fields = ["e", "nb", "t", "mub", "p", "s"]
+    if dimension >= 3:
+        fields.append("muq")
+    if dimension == 4:
+        fields.append("mus")
+    COL = {f: i for i, f in enumerate(fields)}
+else:
+    raise ValueError(f"Unknown solver: {solver}")
 
-for i in range(NT):
-    print(f"Treating case: {i}")
-    file_path = os.path.join(output_folder, f"TEMP_unordered_inversion_{i}.dat")
-    DATA = np.loadtxt(file_path)
-    DATA = DATA[np.argsort(DATA[:, -1])] 
+NT = TILDE["T"]["n"] if "T" in TILDE else 1
 
-    mode = "wb" if i == 0 else "ab"
-    for fname in FNAMES:
-        col_index = COLUMN_MAP[fname]
-        with open(f"EoS_{fname}_b.dat", mode) as f:
-            if i == 0:
-                for h in header:
-                    f.write(struct.pack("f", h))
-            for val in DATA[:, col_index]:
-                f.write(struct.pack("f", val))
+if solver == "MUSIC":
+    header = write_header(TILDE, Thermo)
+    for i in range(NT):
+        print(f"Treating case MUSIC: {i}")
+        data = np.loadtxt(os.path.join(target_folder, f"TEMP_unordered_inversion_{i}.dat"))
+        data = data[np.argsort(data[:, -1])]
+        mode = "wb" if i == 0 else "ab"
+        for fname in fields:
+            with open(f"EoS_{fname}_b.dat", mode) as f:
+                if i == 0:
+                    for h in header:
+                        f.write(struct.pack('f', h))
+                for val in data[:, COL[fname]]:
+                    f.write(struct.pack('f', val))
+    for f in [f"EoS_{f}_b.dat" for f in fields]:
+        shutil.move(f, target_folder)
 
-for fn in FNAMES:
-    shutil.move(f"EoS_{fn}_b.dat", output_folder)
+elif solver == "vHLLE":
+    out_file = os.path.join(target_folder, "EoS_all.dat")
+    with open(out_file, "w") as f_out:
+        for i in range(NT):
+            print(f"Treating case vHLLE: {i}")
+            file_path = os.path.join(target_folder, f"TEMP_unordered_inversion_{i}.dat")
+            data = np.loadtxt(file_path)
+            data = data[np.argsort(data[:, -1])]
+            
+            num_cols = data.shape[1]
+            used_fields = fields[:num_cols] 
 
-raw_data_dir = os.path.join(output_folder, "RAW_DATA")
-os.makedirs(raw_data_dir, exist_ok=True)
+            for row in data:
+                values = [str(row[COL[f]]) for f in used_fields]
+                f_out.write(" ".join(values) + "\n")
+    print(f"Output saved to {out_file}")
+else:
+    raise ValueError(f"Unknown solver: {solver}")
 
-for file in os.listdir(output_folder):
+raw_dir = os.path.join(target_folder, "RAW_DATA")
+os.makedirs(raw_dir, exist_ok=True)
+for file in os.listdir(target_folder):
     if file.startswith("TEMP_unordered_inversion_"):
-        shutil.move(os.path.join(output_folder, file), raw_data_dir)
-
+        shutil.move(os.path.join(target_folder, file), raw_dir)
 if os.path.exists("boundaries_temp.dat"):
     os.remove("boundaries_temp.dat")
-
-for pattern in ["JobArray*", "output*", "errors*"]:
-    os.system(f"rm -rf {pattern}")
+for pat in ["JobArray*", "output*", "errors*"]:
+    os.system(f"rm -rf {pat}")
