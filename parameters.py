@@ -6,8 +6,8 @@ general_parameters = {
     # Dimensions = 3 gives T(e, nb, nq), mub(e, nb, nq), muq(e, nb, nq)
     # Dimensions = 4 gives T(e, nb, nq, ns), mub(e, nb, nq, ns), muq(e, nb, nq, ns), mus(e, nb, nq, ns)
     "AutoSetBoundaries": True,
-    "NT": 2,
-    "NB": 2,
+    "NT": 100,
+    "NB": 100,
     "NQ": 2,
     "NS": 2,
     "Ttilde": [0.009777504201390019, 0.31403115649771435, 10],
@@ -18,6 +18,6 @@ general_parameters = {
     "MAXITER": 100,
     "Number_of_cores": 12,
     "hydro_model": "vHLLE",  
-    "EoS_table": "EOS_filtered.dat",
-    "OutputFolder": "EOS_vhlle_2D",
+    "EoS_table": "converted_thermodynamics.dat",
+    "OutputFolder": "converted_thermodynamics",
 }

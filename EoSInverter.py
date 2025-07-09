@@ -54,7 +54,6 @@ if Param["RunMode"] == 0:
             + " "
             + folder_name
         )
-
 elif Param["RunMode"] == 1:
     # Run on Slurm cluster
     queue = "primary"

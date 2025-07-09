@@ -5,20 +5,16 @@ import numpy as np
 import sys
 from scipy import interpolate
 import pickle
-
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from utils import read_parameters, readTable
 
-
 def key(iT, ib, Nb=5):
     return iT * Nb + ib
-
 
 def ToEN(Tt, mbt):
     e = 19 * np.pi**2 / 12 * Tt**4
     nb = 1 / 3 * mbt * Tt**2
     return np.array([e, nb])
-
 
 def fill_TILDE(DATA):
     d = {}
@@ -28,7 +24,6 @@ def fill_TILDE(DATA):
     d["Arr"] = np.linspace(DATA[0], DATA[1], DATA[2])
     d["d"] = d["Arr"][1] - d["Arr"][0]
     return d
-
 
 def extract_DATA_from(Arr):
     L = list(set(Arr))
@@ -40,17 +35,14 @@ def extract_DATA_from(Arr):
     d["Arr"] = np.linspace(d["MIN"], d["MAX"], d["n"])
     return d
 
-
 def check_lim(X, XMIN, XMAX, tol=1e-8):
     Inside = [(x >= xmin and x <= xmax) for x, xmin, xmax in zip(X, XMIN, XMAX)]
     OnLow = [np.abs(x - xmin) < tol for x, xmin in zip(X, XMIN)]
     OnHigh = [np.abs(x - xmax) < tol for x, xmax in zip(X, XMAX)]
     return all([(ins or L or H) for ins, L, H in zip(Inside, OnLow, OnHigh)])
 
-
 def get_EN_interpolation_at(TMUS, INTERP):
     return np.array([f(np.array(TMUS))[0] for f in INTERP.values()])
-
 
 def getJacobian(local_TMUS, INTERP, absol_deriv=1e-3, deriv_percent=0.02):
     Jacobian = []
@@ -174,9 +166,9 @@ def invert_EOS_tables(
 
     (P_local, s_local) = (f([T_local, muB_local])[0] for f in MTP["INTERP_PS"].values())
     if "vHLLE" == hydro_model:
-        return [EN[0],EN[1],T_local, muB_local, P_local, s_local, int(hyper_index)]
+        return [EN[0],EN[1],T_local, muB_local, P_local, s_local, int(hyper_index)] #output for vhlle e, nb, T, muB, P, S , index
     elif "MUSIC" == hydro_model:
-        return [T_local, muB_local, P_local, s_local, int(hyper_index)]
+        return [T_local, muB_local, P_local, s_local, int(hyper_index)] #output for MUSIC T, muB, P, S, index
     else:
         raise ValueError("Unknown hydro model: {}".format(hydro_model))
 
@@ -230,9 +222,8 @@ if __name__ == "__main__":
 
     # EN in GeV**powers
     EN_powers = [4.0, 3.0]
-    # reshape Temperature
-
-    NT, NB = (TMU_TABLES[Q]["n"] for Q in Thermodynamic_quantities)
+    
+    NT, NB = (TMU_TABLES[Q]["n"] for Q in Thermodynamic_quantities)  # reshape Temperature
     reshaped_T = TMU_TABLES["T"]["Table"].reshape(NT, NB)
     EN_TABLES = {
         Quantity_name: eos_table[:, i].reshape(NT, NB) * reshaped_T**j
@@ -297,7 +288,5 @@ if __name__ == "__main__":
                 OUTPUT_FOLDER + "/TEMP_unordered_inversion_" + str(int(T_ID)) + ".dat",
                 "a",
             ) as file:
-                # if RunMode == 0:
-                #    print("Writting ", results)
                 file.write(" ".join(map(str, results)) + "\n")
         file.close()

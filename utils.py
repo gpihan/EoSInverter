@@ -6,9 +6,6 @@ import string
 import numpy as np
 import pandas as pd
 
-# TArr=($(seq {Xm} {dX} {XM}))
-
-
 def read_parameters(path):
     try:
         spec = importlib.util.spec_from_file_location("general_parameters", path)
@@ -112,11 +109,9 @@ def readTable(EoS_path):
     df = pd.read_csv(EoS_path, sep="\s+", comment="#", header=None)
     return df.to_numpy()
 
-
 def SetBoundaries(EoS_path, dim):
     EOS = readTable(EoS_path)
     T = EOS[:, 0]
-    # To do: Check if user wants normalization ------
     exponents = [4] + [3] * (dim - 1)
     scaling_factors = np.column_stack([T**p for p in exponents])
     dynVars = EOS[:, dim : 2 * dim] * scaling_factors
