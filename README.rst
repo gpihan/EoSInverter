@@ -2,13 +2,11 @@
 EoSInverter
 =======================
 
-**EoSInverter** is a simplified implementation of the forthcoming
-`EoS-TrENsMUTher <https://github.com/gpihan/EoS-TrENsMUTher>`_, designed for
-inverting tabulated Equations of State (EoS) in high-energy nuclear physics.
+**EoSInverter** is a tool for inverting tabulated equations of state (EoS) to express thermodynamic variables—such as temperature and chemical potentials—as functions of hydrodynamic quantities like energy density and conserved charges.
 
-The code reconstructs thermodynamic variables—such as temperature and
-chemical potentials—as functions of hydrodynamic quantities like energy
-density and conserved charges.
+This repository is a simplified version of the full framework that will be available at:
+
+    https://github.com/gpihan/EoS-TrENsMUTher
 
 -----------------------
 Installation
@@ -21,7 +19,7 @@ Installation
    git clone https://github.com/gpihan/EoSInverter.git
    cd EoSInverter
 
-2. **Create a virtual environment and install dependencies**:
+2. **Create and activate a virtual environment**:
 
 .. code-block:: bash
 
@@ -33,79 +31,85 @@ Installation
 Configuration
 -----------------------
 
-Edit the ``parameters.py`` file to set up your run. All parameters are defined in a Python dictionary format.
+Edit the file ``parameters.py`` to configure your run. The parameters are stored in a dictionary called ``general_parameters``.
 
-**Key Parameters Overview**:
+Here’s a breakdown of the default parameters provided:
 
-- **RunMode**:
-  
-  - ``0``: Run locally using one CPU
-  - ``1``: Run on a Slurm cluster
+.. code-block:: python
 
-- **Dimension**:
-
-  - ``1``: T(e)
-  - ``2``: T(e, nb), μB(T, nb)
-  - ``3``: T(e, nb, nq), μB(e, nb, nq), μQ(e, nb, nq)
-  - ``4``: T(e, nb, nq, ns), μB, μQ, μS as functions of (e, nb, nq, ns)
-
-- **Grid Settings**:
-
-  - ``NT, NB, NQ, NS``: Number of points in each direction
-  - ``Ttilde, muBtilde, muQtilde, muStilde``: Ranges as ``[MIN, MAX, N]``
-  - ``AutoSetBoundaries``: If true, automatically sets variable boundaries based on the input table
-
-- **Numerical Parameters**:
-
-  - ``Accuracy``: Convergence threshold for root finding
-  - ``MAXITER``: Maximum iterations allowed
-  - ``Number_of_cores``: Used for parallel execution on a cluster
-
-- **Paths**:
-
-  - ``EoS_table``: Name of the input EoS table
-  - ``OutputFolder``: Folder to store the results
+   general_parameters = {
+       "RunMode": 0,  # 0 = run locally, 1 = run on Slurm cluster
+       "Dimension": 2,  # 2D inversion: T(e, nb), μB(T, nb)
+       "AutoSetBoundaries": True,  # Automatically infer tilde variable ranges from input EoS table
+       "NT": 100,  # Number of temperature grid points
+       "NB": 100,  # Number of baryon density grid points
+       "NQ": 2,    # Grid points in electric charge direction (ignored if Dimension < 3)
+       "NS": 2,    # Grid points in strangeness direction (ignored if Dimension < 4)
+       "Ttilde": [0.0098, 0.3140, 10],  # Manual override for temperature tilde range
+       "muBtilde": [-2.2732, 2.2732, 10],  # Manual override for μB tilde range
+       "muQtilde": [-0.6292, 0.6292, 10],  # Manual override for μQ tilde range
+       "muStilde": [-0.6880, 0.6880, 10],  # Manual override for μS tilde range
+       "Accuracy": 1e-6,  # Convergence criterion for root-finding
+       "MAXITER": 100,  # Max iterations allowed for solvers
+       "Number_of_cores": 12,  # Number of CPU cores for parallel cluster execution
+       "hydro_model": "vHLLE",  # Choose between "vHLLE" and "MUSIC" hydro models -> different output formats
+       "EoS_table": "converted_thermodynamics.dat",  # Path to input EoS table
+       "OutputFolder": "converted_thermodynamics",   # Folder to save results
+   }
 
 -----------------------
 Running the Code
 -----------------------
 
-Once you've configured ``parameters.py``, you can run the main inversion script:
+To start the inversion process, use:
 
 .. code-block:: bash
 
    python3 EoSInverter.py parameters.py
 
+This reads the settings from `parameters.py`, inverts the EoS table, and saves the output to the specified folder.
+
 -----------------------
 Post-Processing
 -----------------------
 
-After the inversion finishes, run the post-processing step to analyze the results:
+After running the main script, you can post-process the results using:
 
 .. code-block:: bash
 
-   python3 PostProcessor.py [OutputFolder] parameters.py
+   python3 PostProcessor.py converted_thermodynamics parameters.py
 
-Replace ``[OutputFolder]`` with the actual folder name specified in your configuration.
+Replace ``converted_thermodynamics`` with the output folder specified in your config if different.
 
 -----------------------
-Project Structure
+Directory Structure
 -----------------------
 
 .. code-block:: text
 
    EoSInverter/
-   ├── EoSInverter.py        # Main inversion script
-   ├── PostProcessor.py      # Post-processing utility
-   ├── parameters.py         # Configuration file
+   ├── EoSInverter.py        # Main script
+   ├── PostProcessor.py      # Post-processing
+   ├── parameters.py         # User-defined settings
    ├── requirements.txt      # Python dependencies
    └── ...
 
 -----------------------
-Related Projects
+Inversion Modes by Dimension
 -----------------------
 
-This repository is a minimal version of the full framework:
-`EoS-TrENsMUTher <https://github.com/gpihan/EoS-TrENsMUTher>`_ (coming soon)
+Depending on the ``Dimension`` value, the inversion behavior changes:
 
+- ``1`` → T(e)
+- ``2`` → T(e, nb), μB(T, nb)
+- ``3`` → T(e, nb, nq), μB(e, nb, nq), μQ(e, nb, nq)
+- ``4`` → T(e, nb, nq, ns), μB, μQ, μS as functions of (e, nb, nq, ns)
+
+-----------------------
+License and Citation
+-----------------------
+
+The full version of this project will be released under an open-source license at:
+
+    https://github.com/gpihan/EoS-TrENsMUTher
 

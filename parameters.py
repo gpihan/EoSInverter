@@ -17,7 +17,7 @@ general_parameters = {
     "Accuracy": 1e-6,
     "MAXITER": 100,
     "Number_of_cores": 12,
-    "hydro_model": "vHLLE",  
+    "hydro_model": "vHLLE", #MUSIC  
     "EoS_table": "converted_thermodynamics.dat",
     "OutputFolder": "converted_thermodynamics",
 }
