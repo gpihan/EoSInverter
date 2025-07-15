@@ -23,9 +23,10 @@ Installation
 
 .. code-block:: bash
 
-   python3 -m venv --clear venv
-   ./venv/bin/pip install --upgrade pip
-   ./venv/bin/pip install -r requirements.txt
+   python3 -m venv venv
+   source ./venv/bin/activate
+   pip install --upgrade pip
+   pip install -r requirements.txt
 
 -----------------------
 Configuration
