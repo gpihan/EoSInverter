@@ -1,0 +1,13 @@
+cff-version: 1.2.0
+message: "If you use this code in your research, please cite it as below."
+authors:
+  - family-names: Pihan
+    given-names: Gregoire
+    orcid: https://orcid.org/0000-0002-7072-4480  # optional
+  - family-names: Polednicek
+    given-names: Tomas
+    orcid: https://orcid.org/0000-0000-0000-1234  # optional
+title: "EoSInverter"
+version: "1.0.0"
+date-released: 2025-07-17
+url: https://github.com/gpihan/EoSInverter
