@@ -1,0 +1,7 @@
+venv/
+jobs/
+data/
+*.dat
+*.log
+*.sh
+.vscode/
