@@ -67,14 +67,26 @@ def getJacobian(local_TMUS, INTERP, absol_deriv=1e-3, deriv_percent=0.02):
 
 def Newton(EN, guessSol, INTERP, MTP):
     iterations, status = 0, True
-    TMUs_sol = guessSol
+    TMUs_sol = np.array(guessSol, dtype=float)
     DeltaEN = get_EN_interpolation_at(TMUs_sol, INTERP) - EN
     Newton_criterion_not_meet = any(
         [(np.abs(Delta) > MTP["ACCURACY"]) for Delta in DeltaEN]
     )
     while Newton_criterion_not_meet:
-        Inverse_jacobian = np.linalg.inv(getJacobian(TMUs_sol, INTERP))
-        TMUs_sol -= np.dot(Inverse_jacobian, DeltaEN)
+        try:
+            J = getJacobian(TMUs_sol, INTERP)
+            # if the matrix is very ill-conditioned, use the pseudo-inverse
+            cond = np.linalg.cond(J)
+            if not np.isfinite(cond) or cond > 1e12:
+                invJ = np.linalg.pinv(J)
+            else:
+                invJ = np.linalg.inv(J)
+        except np.linalg.LinAlgError:
+            # cannot invert -> abort Newton (fallback will be called outside)
+            status = False
+            break
+
+        TMUs_sol -= np.dot(invJ, DeltaEN)
         DeltaEN = get_EN_interpolation_at(TMUs_sol, INTERP) - EN
         Newton_criterion_not_meet = any(
             [(np.abs(Delta) > MTP["ACCURACY"]) for Delta in DeltaEN]
@@ -110,7 +122,6 @@ def binary_search_1d(ed_local, MUs, INTERP, TMU_TABLES, MTP):
                 T_min = T_mid
             iteration += 1
         return T_mid
-
 
 def binary_search_2d(EN, INTERP, TMU_TABLES, MTP):
     iteration = 0
@@ -158,20 +169,21 @@ def invert_EOS_tables(
     success = False
     try:
         success, T_local, muB_local = Newton(EN, guessSol, INTERP, MTP)
-    except NameError:
+    except Exception:
+        # unexpected error in Newton — fall back to backup
+        success = False
+
+    if not success or T_local is None:
         T_local, muB_local = binary_search_2d(EN, INTERP, TMU_TABLES, MTP)
         success = True
-    if not success:
-        T_local, muB_local = binary_search_2d(EN, INTERP, TMU_TABLES, MTP)
 
     (P_local, s_local) = (f([T_local, muB_local])[0] for f in MTP["INTERP_PS"].values())
     if "vHLLE" == hydro_model:
-        return [EN[0],EN[1],T_local, muB_local, P_local, s_local, int(hyper_index)] #output for vhlle e, nb, T, muB, P, S , index
+        return [EN[0],EN[1],T_local, muB_local, P_local, s_local, int(hyper_index)] # output for vHLLE: e, nB, T, muB, P, S, index
     elif "MUSIC" == hydro_model:
-        return [T_local, muB_local, P_local, s_local, int(hyper_index)] #output for MUSIC T, muB, P, S, index
+        return [T_local, muB_local, P_local, s_local, int(hyper_index)] # output for MUSIC: T, muB, P, S, index
     else:
         raise ValueError("Unknown hydro model: {}".format(hydro_model))
-
 
 if __name__ == "__main__":
     try:
