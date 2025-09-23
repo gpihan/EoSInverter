@@ -82,7 +82,7 @@ python3 mapEOS_4D.py {Parameters_path} $T_value $index {folder_name}
 def Get2DTilde(vec):  # Input GeV^4, GeV^3
     e, nb = vec.T
     Ttilde = (12 / (19 * np.pi**2) * e) ** 0.25  # GeV
-    muBtilde = 5 * nb / Ttilde**2  # GeV
+    muBtilde = 3 * nb / Ttilde**2  # GeV
     return np.column_stack((Ttilde, muBtilde))
 
 
