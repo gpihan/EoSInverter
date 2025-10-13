@@ -1,5 +1,8 @@
 venv/
 jobs/
+plots/
+merger/
+input/
 data/
 *.dat
 *.log
