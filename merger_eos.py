@@ -1,5 +1,4 @@
 # Copyright Tomáš Poledníček, Gregoire Pihan @ 2025
-
 import argparse
 import sys
 
@@ -17,7 +16,7 @@ python3 merger_eos.py \
   --trline input/TransitionLine.dat \
   --regions input/RegionS.dat \
   --out output/MergedEoS.dat \
-  --Ne 600 --Nn 600
+  --Ne 100 --Nn 100
 Inputs (text files):
   - EoS_above.dat   : columns [e, nB, T, muB]
   - EoS_below.dat   : columns [e, nB, T, muB]
@@ -52,6 +51,7 @@ def parse_args(argv=None):
     p.add_argument("--out", default="MergedEoS.dat", help="output file")
     p.add_argument("--Ne", type=int, default=400, help="number of steps in e axis")
     p.add_argument("--Nn", type=int, default=200, help="number of steps in nB axis")
+
     return p.parse_args(argv)
 
 
@@ -74,7 +74,12 @@ def Get2DTilde(e, nb):
 
 def CheckB(T, mub, TrLine):
     try:
-        return (not np.isnan(T)) and (not np.isnan(mub)) and (T < TrLine(mub))
+        return (
+            (not np.isnan(T))
+            and (not np.isnan(mub))
+            and (mub > 0.4)
+            and (T < TrLine(mub))
+        )
     except Exception:
         return False
 
@@ -100,19 +105,95 @@ def CheckC(T, muB, Tmin=0.029, Tmax=0.4, muBmin=0.0, muBmax=0.4):
     )
 
 
-def GetGoodTmuB(TC, TA, TB, muBC, muBA, muBB, TrLine, e, nB):
-    Ta, muBa = TA(e, nB), muBA(e, nB)
-    Tb, muBb = TB(e, nB), muBB(e, nB)
-    Tc, muBc = TC(e, nB), muBC(e, nB)
+def GetGoodTmuB(TC, TA, TB, muBC, muBA, muBB, TrLine, e, nB, A, B, C):
+    e_A, n_A = A[:, 0], A[:, 1]
+    e_B, n_B = B[:, 0], B[:, 1]
+    e_C, n_C = C[:, 0], C[:, 1]
 
-    if CheckA(Ta, muBa, TrLine):
+    # check if inside convex hulls
+    if (e > e_A.min() and e < e_A.max()) and (nB > n_A.min() and nB < n_A.max()):
+        Ta, muBa = TA(e, nB), muBA(e, nB)
+    if (e > e_B.min() and e < e_B.max()) and (nB > n_B.min() and nB < n_B.max()):
+        Tb, muBb = TB(e, nB), muBB(e, nB)
+    if (e > e_C.min() and e < e_C.max()) and (nB > n_C.min() and nB < n_C.max()):
+        Tc, muBc = TC(e, nB), muBC(e, nB)
+
+    if (
+        (e > e_A.min() and e < e_A.max())
+        and (nB > n_A.min() and nB < n_A.max())
+        and CheckA(Ta, muBa, TrLine)
+    ):
         return Ta, muBa, 1
-    elif CheckB(Tb, muBb, TrLine):
+    if (
+        (e > e_B.min() and e < e_B.max())
+        and (nB > n_B.min() and nB < n_B.max())
+        and CheckB(Tb, muBb, TrLine)
+    ):
         return Tb, muBb, 0
-    elif CheckC(Tc, muBc):
+    if (
+        (e > e_C.min() and e < e_C.max())
+        and (nB > n_C.min() and nB < n_C.max())
+        and CheckC(Tc, muBc)
+    ):
         return Tc, muBc, -1
+
+    return False, False, False
+
+
+def compute_chi(e, nB, eH, nH, eQ, nQ):
+    chi_e = None
+    chi_n = None
+    if eQ != eH:
+        chi_e = (e - eH) / (eQ - eH)
+    if nQ != nH:
+        chi_n = (nB - nH) / (nQ - nH)
+    # average if both are valid
+    if chi_e is not None and chi_n is not None:
+        chi = 0.5 * (chi_e + chi_n)
     else:
-        return False, False, False
+        chi = chi_e if chi_e is not None else chi_n
+    return chi, chi_e, chi_n
+
+
+def point_to_segment_distance(px, py, x1, y1, x2, y2):
+    seg = np.array([x2 - x1, y2 - y1])
+    pt = np.array([px - x1, py - y1])
+    seg_len2 = np.dot(seg, seg)
+    if seg_len2 == 0:  # degenerate segment
+        return np.linalg.norm(pt)
+    t = max(0, min(1, np.dot(pt, seg) / seg_len2))
+    proj = np.array([x1, y1]) + t * seg
+    return np.linalg.norm([px - proj[0], py - proj[1]])
+
+
+def find_closest_transition(e, nB, table):
+    rows = []
+    for i, row in enumerate(table):
+        try:
+            Tc, muBc, eH, nBH, eQ, nBQ = row
+            eH_f, nBH_f, eQ_f, nBQ_f = float(eH), float(nBH), float(eQ), float(nBQ)
+        except Exception:
+            continue
+        if not (
+            (min(eH_f, eQ_f) <= e <= max(eH_f, eQ_f))
+            and (min(nBH_f, nBQ_f) <= nB <= max(nBH_f, nBQ_f))
+        ):
+            continue
+        rows.append((i, float(Tc), float(muBc), eH_f, nBH_f, eQ_f, nBQ_f))
+
+    if len(rows) == 0:
+        return False, False, False, None, None
+
+    # compute distances
+    dists = []
+    for i, Tc_f, muBc_f, eH_f, nBH_f, eQ_f, nBQ_f in rows:
+        d = point_to_segment_distance(e, nB, eH_f, nBH_f, eQ_f, nBQ_f)
+        dists.append((d, i, Tc_f, muBc_f, eH_f, nBH_f, eQ_f, nBQ_f))
+
+    dists.sort(key=lambda x: x[0])
+    _, _, Tc_f, muBc_f, eH_f, nBH_f, eQ_f, nBQ_f = dists[0]
+    chi, chi_e, chi_nB = compute_chi(e, nB, eH_f, nBH_f, eQ_f, nBQ_f)
+    return Tc_f, muBc_f, chi, chi_e, chi_nB
 
 
 def plot_T_mub_plane(A, B, C):
@@ -148,14 +229,15 @@ def plot_tilde_plane(
     plt.show()
 
 
-def run_merger(EoS_above, EoS_below, EoS_cross, TrLine, datS, out_path, Ne, Nn):
-    print("Loading tables ...")
+def run_merger(
+    EoS_above, EoS_below, EoS_cross, TrLine, datS, out_path, Ne, Nn, no_plot=False
+):
     A = readTable(EoS_above)
     B = readTable(EoS_below)
     C = readTable(EoS_cross)
     datTRLine = readTable(TrLine)
     datS = readTable(datS)
-    print("... tables loaded.")
+
     # define interpolators
     # Transition line
     TrLine = interp1d(
@@ -195,28 +277,34 @@ def run_merger(EoS_above, EoS_below, EoS_cross, TrLine, datS, out_path, Ne, Nn):
     TTILDEArr = np.linspace(TTil_min, TTil_max, Ne)
     mubTILDEArr = np.linspace(muBBtil_min, muBBtil_max, Nn)
 
-    # plot-functions test
-    # plot_tilde_plane(TTilA, muBBtilA, TTilB, muBBtilB, TTilC, muBBtilC,TTILDEArr, mubTILDEArr)
     # plot_T_mub_plane(A, B, C)
-
     # Main loop - create MergedEoS.dat
     print(f"Writing merged EoS to {out_path} ...")
 
     with open(out_path, "w") as f:
-        f.write("# e nb Ttilde muBtilde T muB chi\n")
+        f.write("# e nb Ttilde muBtilde T muB chi chi_e chi_n\n")
         for Ttilde in TTILDEArr:
             for muBtilde in mubTILDEArr:
                 e, nB = ToEN(Ttilde, muBtilde)
-                T, muB, chi = GetGoodTmuB(TC, TA, TB, muBC, muBA, muBB, TrLine, e, nB)
-
-                if T is False:
-                    continue
+                res = find_closest_transition(e, nB, datS)
+                if res[0] is not False:
+                    T, muB, chi, chi_e, chi_n = res
                 else:
-                    f.write(
-                        f"{e:12.6e} {nB:12.6e} {Ttilde:12.6e} {muBtilde:12.6e} {T:12.6e} {muB:12.6e} {chi:8.3f}\n"
+                    # fallback: use interpolators to decide region
+                    T, muB, chi = GetGoodTmuB(
+                        TC, TA, TB, muBC, muBA, muBB, TrLine, e, nB, A, B, C
                     )
+                    chi_e = None
+                    chi_n = None
+                    if T is False:
+                        continue
+                chi_e_val = chi_e if chi_e is not None else np.nan
+                chi_n_val = chi_n if chi_n is not None else np.nan
 
-    f.close()
+                f.write(
+                    f"{e:.6e} {nB:.6e} {Ttilde:.6e} {muBtilde:.6e} {T:.6e} {muB:.6e} {chi:.6e} {chi_e_val:.6e} {chi_n_val:.6e}\n"
+                )
+
     print("... done.")
 
 
@@ -232,7 +320,14 @@ def main(argv):
     Nn = args.Nn
 
     run_merger(
-        path_above, path_below, path_cross, path_trline, path_regions, out_path, Ne, Nn
+        path_above,
+        path_below,
+        path_cross,
+        path_trline,
+        path_regions,
+        out_path,
+        Ne,
+        Nn,
     )
 
 
