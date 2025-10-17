@@ -6,13 +6,14 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from scipy.interpolate import LinearNDInterpolator, interp1d
+from scipy.spatial import Delaunay, cKDTree
 
 """
 Merge three EoS tables (above/below/crossover) into a unified map (e, nB) -> (T, muB, chi).
 python3 merger_eos.py \
-  --above input/EoSAbove_clean.dat \
-  --below input/EoSBelow_clean.dat \
-  --cross input/EoS_cross.dat \
+  --above output/EoSAbove_clean.dat \
+  --below output/EoSBelow_clean.dat \
+  --cross output/EoSCross_clean.dat \
   --trline input/TransitionLine.dat \
   --regions input/RegionS.dat \
   --out output/MergedEoS.dat \
@@ -62,7 +63,7 @@ def readTable(EoS_path):
 
 def ToEN(Tt, mbt):
     e = 19 * np.pi**2 / 12 * Tt**4
-    nb = 1 / 3 * mbt * Tt**2
+    nb = 1 / 5 * (mbt * Tt**2)
     return e, nb
 
 
@@ -96,7 +97,7 @@ def CheckA(T, mub, TrLine):
         return False
 
 
-def CheckC(T, muB, Tmin=0.029, Tmax=0.4, muBmin=0.0, muBmax=0.4):
+def CheckC(T, muB, Tmin=0.0, Tmax=0.6, muBmin=0.0, muBmax=0.4):
     return (
         (not np.isnan(T))
         and (not np.isnan(muB))
@@ -105,37 +106,92 @@ def CheckC(T, muB, Tmin=0.029, Tmax=0.4, muBmin=0.0, muBmax=0.4):
     )
 
 
-def GetGoodTmuB(TC, TA, TB, muBC, muBA, muBB, TrLine, e, nB, A, B, C):
-    e_A, n_A = A[:, 0], A[:, 1]
-    e_B, n_B = B[:, 0], B[:, 1]
-    e_C, n_C = C[:, 0], C[:, 1]
+def GetGoodTmuB(
+    TC,
+    TA,
+    TB,
+    muBC,
+    muBA,
+    muBB,
+    TrLine,
+    e,
+    nB,
+    triA,
+    triB,
+    triC,
+    treeA,
+    treeB,
+    treeC,
+):
+    """
+    Select (T, muB, chiFlag) for the point (e, nB) using robust tests in the (T~, muB~) plane.
 
-    # check if inside convex hulls
-    if (e > e_A.min() and e < e_A.max()) and (nB > n_A.min() and nB < n_A.max()):
-        Ta, muBa = TA(e, nB), muBA(e, nB)
-    if (e > e_B.min() and e < e_B.max()) and (nB > n_B.min() and nB < n_B.max()):
-        Tb, muBb = TB(e, nB), muBB(e, nB)
-    if (e > e_C.min() and e < e_C.max()) and (nB > n_C.min() and nB < n_C.max()):
-        Tc, muBc = TC(e, nB), muBC(e, nB)
+    - First, test whether the point lies inside the convex hull of regions A/B/C via Delaunay triangulations.
+    - If the point is not inside any triangulation, fall back to the nearest region according to KDTree
+      (minimum distance in the tilde plane) and validate the choice with CheckA/CheckB/CheckC.
 
-    if (
-        (e > e_A.min() and e < e_A.max())
-        and (nB > n_A.min() and nB < n_A.max())
-        and CheckA(Ta, muBa, TrLine)
-    ):
-        return Ta, muBa, 1
-    if (
-        (e > e_B.min() and e < e_B.max())
-        and (nB > n_B.min() and nB < n_B.max())
-        and CheckB(Tb, muBb, TrLine)
-    ):
-        return Tb, muBb, 0
-    if (
-        (e > e_C.min() and e < e_C.max())
-        and (nB > n_C.min() and nB < n_C.max())
-        and CheckC(Tc, muBc)
-    ):
-        return Tc, muBc, -1
+    Returns (T, muB, chiFlag) with chiFlag ∈ {1 (Above), 0 (Below), -1 (Cross)}; on failure returns (False, False, False).
+    """
+    TTilde, muBTilde = Get2DTilde(e, nB)
+
+    p = np.array([TTilde, muBTilde])
+
+    try:
+        if triC is not None and (triC.find_simplex(p) >= 0):
+            Tc, muBc = TC(e, nB), muBC(e, nB)
+            if CheckC(Tc, muBc):
+                return Tc, muBc, -1
+    except Exception:
+        pass
+
+    try:
+        if triB is not None and (triB.find_simplex(p) >= 0):
+            Tb, muBb = TB(e, nB), muBB(e, nB)
+            if CheckB(Tb, muBb, TrLine):
+                return Tb, muBb, 0
+    except Exception:
+        pass
+
+    try:
+        if triA is not None and (triA.find_simplex(p) >= 0):
+            Ta, muBa = TA(e, nB), muBA(e, nB)
+            if CheckA(Ta, muBa, TrLine):
+                return Ta, muBa, 1
+    except Exception:
+        pass
+
+    dists = []
+    try:
+        dA = treeA.query(p)[0]
+        dists.append((float(dA), "A"))
+    except Exception:
+        dists.append((np.inf, "A"))
+    try:
+        dB = treeB.query(p)[0]
+        dists.append((float(dB), "B"))
+    except Exception:
+        dists.append((np.inf, "B"))
+    try:
+        dC = treeC.query(p)[0]
+        dists.append((float(dC), "C"))
+    except Exception:
+        dists.append((np.inf, "C"))
+
+    dists.sort(key=lambda x: x[0])
+
+    for _, region in dists:
+        if region == "C":
+            Tc, muBc = TC(e, nB), muBC(e, nB)
+            if CheckC(Tc, muBc):
+                return Tc, muBc, -1
+        elif region == "B":
+            Tb, muBb = TB(e, nB), muBB(e, nB)
+            if CheckB(Tb, muBb, TrLine):
+                return Tb, muBb, 0
+        else:  # "A"
+            Ta, muBa = TA(e, nB), muBA(e, nB)
+            if CheckA(Ta, muBa, TrLine):
+                return Ta, muBa, 1
 
     return False, False, False
 
@@ -207,6 +263,31 @@ def plot_T_mub_plane(A, B, C):
     plt.show()
 
 
+def plot_EN_plane(A, B, C, TTILDEArr, mubTILDEArr):
+    fig, ax = plt.subplots(figsize=(7, 6))
+    TTmin, TTmax = TTILDEArr.min(), TTILDEArr.max()
+    mubmin, mubmax = mubTILDEArr.min(), mubTILDEArr.max()
+    ax.scatter(A[:, 0], A[:, 1], s=1, color="red", label="Above")
+    ax.scatter(B[:, 0], B[:, 1], s=1, color="blue", label="Below")
+    ax.scatter(C[:, 0], C[:, 1], s=1, color="green", label="Cross")
+    ax.scatter(
+        ToEN(TTILDEArr, mubTILDEArr)[0],
+        ToEN(TTILDEArr, mubTILDEArr)[1],
+        s=1.0,
+        color="black",
+        alpha=0.1,
+        label="Grid points",
+    )
+    ax.scatter(ToEN(TTmin, mubmin)[0], ToEN(TTmin, mubmin)[1], s=20, color="black")
+    ax.scatter(ToEN(TTmin, mubmax)[0], ToEN(TTmin, mubmax)[1], s=20, color="black")
+    ax.scatter(ToEN(TTmax, mubmin)[0], ToEN(TTmax, mubmin)[1], s=20, color="black")
+    ax.scatter(ToEN(TTmax, mubmax)[0], ToEN(TTmax, mubmax)[1], s=20, color="black")
+    ax.set_xlabel("e [GeV/fm^3]")
+    ax.set_ylabel("nB [1/fm^3]")
+    ax.legend()
+    plt.show()
+
+
 def plot_tilde_plane(
     TTilA, muBBtilA, TTilB, muBBtilB, TTilC, muBBtilC, TTILDEArr, mubTILDEArr
 ):
@@ -229,9 +310,7 @@ def plot_tilde_plane(
     plt.show()
 
 
-def run_merger(
-    EoS_above, EoS_below, EoS_cross, TrLine, datS, out_path, Ne, Nn, no_plot=False
-):
+def run_merger(EoS_above, EoS_below, EoS_cross, TrLine, datS, out_path, Ne, Nn):
     A = readTable(EoS_above)
     B = readTable(EoS_below)
     C = readTable(EoS_cross)
@@ -239,14 +318,19 @@ def run_merger(
     datS = readTable(datS)
 
     # define interpolators
-    # Transition line
+    # Transition line (do not extrapolate: return NaN outside domain)
     TrLine = interp1d(
-        datTRLine[:, 0] / 1000, datTRLine[:, 1] / 1000
-    )  # convert MeV -> GeV
+        datTRLine[:, 0] / 1000,
+        datTRLine[:, 1] / 1000,
+        kind="linear",
+        bounds_error=False,
+        fill_value=np.nan,
+    )  # convert MeV -> GeV, NaN outside
 
     # Cross
     pointsC = C[:, :2]
     valuesC = C[:, 2]
+
     TC = LinearNDInterpolator(pointsC, valuesC, fill_value=np.nan)
     valuesMC = C[:, 3]
     muBC = LinearNDInterpolator(pointsC, valuesMC, fill_value=np.nan)
@@ -254,6 +338,7 @@ def run_merger(
     # Below
     pointsB = B[:, :2]
     valuesB = B[:, 2]
+
     TB = LinearNDInterpolator(pointsB, valuesB, fill_value=np.nan)
     valuesMB = B[:, 3]
     muBB = LinearNDInterpolator(pointsB, valuesMB, fill_value=np.nan)
@@ -261,6 +346,7 @@ def run_merger(
     # Above
     pointsA = A[:, :2]
     valuesA = A[:, 2]
+
     TA = LinearNDInterpolator(pointsA, valuesA, fill_value=np.nan)
     valuesMA = A[:, 3]
     muBA = LinearNDInterpolator(pointsA, valuesMA, fill_value=np.nan)
@@ -268,6 +354,28 @@ def run_merger(
     TTilA, muBBtilA = Get2DTilde(A[:, 0], A[:, 1])
     TTilB, muBBtilB = Get2DTilde(B[:, 0], B[:, 1])
     TTilC, muBBtilC = Get2DTilde(C[:, 0], C[:, 1])
+
+    # Precompute points in the tilde plane and Delaunay/KDTree structures for fast membership/nearest queries
+    ptsA_tilde = np.column_stack((TTilA, muBBtilA))
+    ptsB_tilde = np.column_stack((TTilB, muBBtilB))
+    ptsC_tilde = np.column_stack((TTilC, muBBtilC))
+
+    def _make_triangulation(pts):
+        try:
+            if pts.shape[0] >= 3:
+                return Delaunay(pts)
+        except Exception:
+            return None
+        return None
+
+    triA = _make_triangulation(ptsA_tilde)
+    triB = _make_triangulation(ptsB_tilde)
+    triC = _make_triangulation(ptsC_tilde)
+
+    # KD-trees (fallback by nearest region)
+    treeA = cKDTree(ptsA_tilde) if ptsA_tilde.size else None
+    treeB = cKDTree(ptsB_tilde) if ptsB_tilde.size else None
+    treeC = cKDTree(ptsC_tilde) if ptsC_tilde.size else None
 
     TTil_min = float(min(TTilA.min(), TTilB.min(), TTilC.min()))
     TTil_max = float(max(TTilA.max(), TTilB.max(), TTilC.max()))
@@ -292,7 +400,21 @@ def run_merger(
                 else:
                     # fallback: use interpolators to decide region
                     T, muB, chi = GetGoodTmuB(
-                        TC, TA, TB, muBC, muBA, muBB, TrLine, e, nB, A, B, C
+                        TC,
+                        TA,
+                        TB,
+                        muBC,
+                        muBA,
+                        muBB,
+                        TrLine,
+                        e,
+                        nB,
+                        triA,
+                        triB,
+                        triC,
+                        treeA,
+                        treeB,
+                        treeC,
                     )
                     chi_e = None
                     chi_n = None

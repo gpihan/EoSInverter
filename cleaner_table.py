@@ -37,12 +37,24 @@ def filter_eos(eos_df, transition_table, keep_above):
 
 
 def plot(
-    eeos_below_raw, eos_above_raw, eos_below_clean, eos_above_clean, transition_line
+    eoscross,
+    eos_below_raw,
+    eos_above_raw,
+    eos_below_clean,
+    eos_above_clean,
+    transition_line,
 ):
     fig, ax = plt.subplots(1, 2, figsize=(10, 8))
     ax[0].scatter(
-        eeos_below_raw[:, 3],
-        eeos_below_raw[:, 2],
+        eoscross[:, 3],
+        eoscross[:, 2],
+        color="green",
+        alpha=0.5,
+        label="EoS cross",
+    )
+    ax[0].scatter(
+        eos_below_raw[:, 3],
+        eos_below_raw[:, 2],
         color="blue",
         alpha=0.4,
         label="EoS below raw",
@@ -63,8 +75,15 @@ def plot(
     )
     ax[0].set_xlabel(r"$\mu_B$ [GeV]")
     ax[0].set_ylabel(r"$T$ [GeV]")
-    ax[0].legend()
     ax[0].grid(True)
+
+    ax[1].scatter(
+        eoscross[:, 3],
+        eoscross[:, 2],
+        color="green",
+        alpha=0.5,
+        label="EoS cross",
+    )
 
     ax[1].scatter(
         eos_below_clean[:, 3],
@@ -92,6 +111,8 @@ def plot(
     ax[1].legend()
     ax[1].grid(True)
 
+    plt.tight_layout()
+
     plt.show()
 
 
@@ -102,8 +123,9 @@ def main():
 
     transition_line = readTable(base_dir + "/input/TransitionLine.dat")
 
-    eos_above_raw = readTable(base_dir + "/Above1stOrder_formatted/EoS_all.dat")
-    eos_below_raw = readTable(base_dir + "/Below1stOrder_formatted/EoS_all.dat")
+    eos_above_raw = readTable(base_dir + "/EoSAboveGeV/EoS_all.dat")
+    eos_below_raw = readTable(base_dir + "/EoSBelowGeV/EoS_all.dat")
+    eos_cross = readTable(base_dir + "/EoSCrossGeV/EoS_all.dat")
 
     eos_above_clean = filter_eos(eos_above_raw, transition_line, keep_above=True)
     eos_below_clean = filter_eos(eos_below_raw, transition_line, keep_above=False)
@@ -121,9 +143,20 @@ def main():
         header=False,
         sep="\t",
     )
+    pd.DataFrame(eos_cross).to_csv(
+        os.path.join(output_dir, "EoSCross_clean.dat"),
+        index=False,
+        header=False,
+        sep="\t",
+    )
 
     plot(
-        eos_below_raw, eos_above_raw, eos_below_clean, eos_above_clean, transition_line
+        eos_cross,
+        eos_below_raw,
+        eos_above_raw,
+        eos_below_clean,
+        eos_above_clean,
+        transition_line,
     )
 
     print(f"Number of points in EoSAbove (clean): {len(eos_above_clean)}")
