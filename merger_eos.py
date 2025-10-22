@@ -2,11 +2,12 @@
 import argparse
 import sys
 
-import matplotlib.pyplot as plt
+import geopandas as gpd
 import numpy as np
 import pandas as pd
 from scipy.interpolate import LinearNDInterpolator, interp1d
-from scipy.spatial import Delaunay, cKDTree
+from scipy.spatial import Delaunay
+from shapely.geometry import Point
 
 """
 Merge three EoS tables (above/below/crossover) into a unified map (e, nB) -> (T, muB, chi).
@@ -26,7 +27,7 @@ Inputs (text files):
   - RegionS.dat     : columns [Tc(GeV), muBc(GeV), eH, nBH, eQ, nBQ] — from FindVals.py
 
 Output:
-  - MergedEoS.dat : columns [e, nB, T, muB, chi]
+    - MergedEoS.dat : columns [e, nB, T, muB, P, S, chi]
       chi = 0.0  -> hadron (below)
       chi = 1.0  -> QGP (above)
       chi = -1.0 -> crossover
@@ -97,7 +98,7 @@ def CheckA(T, mub, TrLine):
         return False
 
 
-def CheckC(T, muB, Tmin=0.0, Tmax=0.6, muBmin=0.0, muBmax=0.4):
+def CheckC(T, muB, Tmin=0.0, Tmax=0.6, muBmin=0.0, muBmax=0.399):
     return (
         (not np.isnan(T))
         and (not np.isnan(muB))
@@ -119,81 +120,42 @@ def GetGoodTmuB(
     triA,
     triB,
     triC,
-    treeA,
-    treeB,
-    treeC,
+    PC,
+    PB,
+    PA,
+    SC,
+    SB,
+    SA,
 ):
-    """
-    Select (T, muB, chiFlag) for the point (e, nB) using robust tests in the (T~, muB~) plane.
-
-    - First, test whether the point lies inside the convex hull of regions A/B/C via Delaunay triangulations.
-    - If the point is not inside any triangulation, fall back to the nearest region according to KDTree
-      (minimum distance in the tilde plane) and validate the choice with CheckA/CheckB/CheckC.
-
-    Returns (T, muB, chiFlag) with chiFlag ∈ {1 (Above), 0 (Below), -1 (Cross)}; on failure returns (False, False, False).
-    """
     TTilde, muBTilde = Get2DTilde(e, nB)
 
     p = np.array([TTilde, muBTilde])
 
     try:
         if triC is not None and (triC.find_simplex(p) >= 0):
-            Tc, muBc = TC(e, nB), muBC(e, nB)
+            Tc, muBc, Pc, Sc = TC(e, nB), muBC(e, nB), PC(e, nB), SC(e, nB)
             if CheckC(Tc, muBc):
-                return Tc, muBc, -1
+                return Tc, muBc, Pc, Sc, -1
     except Exception:
         pass
 
     try:
         if triB is not None and (triB.find_simplex(p) >= 0):
-            Tb, muBb = TB(e, nB), muBB(e, nB)
+            Tb, muBb, Pb, Sb = TB(e, nB), muBB(e, nB), PB(e, nB), SB(e, nB)
             if CheckB(Tb, muBb, TrLine):
-                return Tb, muBb, 0
+                return Tb, muBb, Pb, Sb, 0
     except Exception:
         pass
 
     try:
         if triA is not None and (triA.find_simplex(p) >= 0):
-            Ta, muBa = TA(e, nB), muBA(e, nB)
+            Ta, muBa, Pa, Sa = TA(e, nB), muBA(e, nB), PA(e, nB), SA(e, nB)
             if CheckA(Ta, muBa, TrLine):
-                return Ta, muBa, 1
+                return Ta, muBa, Pa, Sa, 1
     except Exception:
         pass
 
-    dists = []
-    try:
-        dA = treeA.query(p)[0]
-        dists.append((float(dA), "A"))
-    except Exception:
-        dists.append((np.inf, "A"))
-    try:
-        dB = treeB.query(p)[0]
-        dists.append((float(dB), "B"))
-    except Exception:
-        dists.append((np.inf, "B"))
-    try:
-        dC = treeC.query(p)[0]
-        dists.append((float(dC), "C"))
-    except Exception:
-        dists.append((np.inf, "C"))
-
-    dists.sort(key=lambda x: x[0])
-
-    for _, region in dists:
-        if region == "C":
-            Tc, muBc = TC(e, nB), muBC(e, nB)
-            if CheckC(Tc, muBc):
-                return Tc, muBc, -1
-        elif region == "B":
-            Tb, muBb = TB(e, nB), muBB(e, nB)
-            if CheckB(Tb, muBb, TrLine):
-                return Tb, muBb, 0
-        else:  # "A"
-            Ta, muBa = TA(e, nB), muBA(e, nB)
-            if CheckA(Ta, muBa, TrLine):
-                return Ta, muBa, 1
-
-    return False, False, False
+    return False, False, False, False, False
 
 
 def compute_chi(e, nB, eH, nH, eQ, nQ):
@@ -205,7 +167,7 @@ def compute_chi(e, nB, eH, nH, eQ, nQ):
         chi_n = (nB - nH) / (nQ - nH)
     # average if both are valid
     if chi_e is not None and chi_n is not None:
-        chi = 0.5 * (chi_e + chi_n)
+        chi = 0.3  # * (chi_e + chi_n)
     else:
         chi = chi_e if chi_e is not None else chi_n
     return chi, chi_e, chi_n
@@ -226,7 +188,12 @@ def find_closest_transition(e, nB, table):
     rows = []
     for i, row in enumerate(table):
         try:
-            Tc, muBc, eH, nBH, eQ, nBQ = row
+            # datS can contain: T muB eH nBH eQ nBQ pH sH pQ sQ
+            Tc, muBc, eH, nBH, eQ, nBQ = row[:6]
+            # Optional pressure/entropy at hadron/QGP endpoints
+            pH = sH = pQ = sQ = None
+            if len(row) >= 10:
+                pH, sH, pQ, sQ = row[6:10]
             eH_f, nBH_f, eQ_f, nBQ_f = float(eH), float(nBH), float(eQ), float(nBQ)
         except Exception:
             continue
@@ -235,79 +202,92 @@ def find_closest_transition(e, nB, table):
             and (min(nBH_f, nBQ_f) <= nB <= max(nBH_f, nBQ_f))
         ):
             continue
-        rows.append((i, float(Tc), float(muBc), eH_f, nBH_f, eQ_f, nBQ_f))
+        rows.append(
+            (
+                i,
+                float(Tc),
+                float(muBc),
+                eH_f,
+                nBH_f,
+                eQ_f,
+                nBQ_f,
+                None if pH is None else float(pH),
+                None if sH is None else float(sH),
+                None if pQ is None else float(pQ),
+                None if sQ is None else float(sQ),
+            )
+        )
 
     if len(rows) == 0:
-        return False, False, False, None, None
+        # T, muB, P, S, chi, chi_e, chi_n
+        return False, False, False, False, False, None, None
 
     # compute distances
     dists = []
-    for i, Tc_f, muBc_f, eH_f, nBH_f, eQ_f, nBQ_f in rows:
+    for i, Tc_f, muBc_f, eH_f, nBH_f, eQ_f, nBQ_f, pH_f, sH_f, pQ_f, sQ_f in rows:
         d = point_to_segment_distance(e, nB, eH_f, nBH_f, eQ_f, nBQ_f)
-        dists.append((d, i, Tc_f, muBc_f, eH_f, nBH_f, eQ_f, nBQ_f))
+        dists.append(
+            (d, i, Tc_f, muBc_f, eH_f, nBH_f, eQ_f, nBQ_f, pH_f, sH_f, pQ_f, sQ_f)
+        )
 
     dists.sort(key=lambda x: x[0])
-    _, _, Tc_f, muBc_f, eH_f, nBH_f, eQ_f, nBQ_f = dists[0]
+    (
+        _,
+        _,
+        Tc_f,
+        muBc_f,
+        eH_f,
+        nBH_f,
+        eQ_f,
+        nBQ_f,
+        pH_f,
+        sH_f,
+        pQ_f,
+        sQ_f,
+    ) = dists[0]
     chi, chi_e, chi_nB = compute_chi(e, nB, eH_f, nBH_f, eQ_f, nBQ_f)
-    return Tc_f, muBc_f, chi, chi_e, chi_nB
+    # Interpolate pressure and entropy along the segment if available
+    P = S = None
+    if chi is not None and (pH_f is not None) and (pQ_f is not None):
+        P = (1 - chi) * pH_f + chi * pQ_f
+    if chi is not None and (sH_f is not None) and (sQ_f is not None):
+        S = (1 - chi) * sH_f + chi * sQ_f
+    return Tc_f, muBc_f, P, S, chi, chi_e, chi_nB
 
 
-def plot_T_mub_plane(A, B, C):
-    fig, ax = plt.subplots(figsize=(7, 6))
-    ax.scatter(A[:, 3], A[:, 2], s=1, color="red", label="Above")
-    ax.scatter(B[:, 3], B[:, 2], s=1, color="blue", label="Below")
-    ax.scatter(C[:, 3], C[:, 2], s=1, color="green", label="Cross")
-    ax.set_xlabel("muB [GeV]")
-    ax.set_ylabel("T [GeV]")
-    ax.legend()
-    plt.show()
+def create_geodataframes_and_polygons(eos_above, eos_below, eos_cross):
+    TildeT_above, muBtilde_above = Get2DTilde(eos_above[:, 0], eos_above[:, 1])
+    TildeT_below, muBtilde_below = Get2DTilde(eos_below[:, 0], eos_below[:, 1])
+    TildeT_cross, muBtilde_cross = Get2DTilde(eos_cross[:, 0], eos_cross[:, 1])
 
-
-def plot_EN_plane(A, B, C, TTILDEArr, mubTILDEArr):
-    fig, ax = plt.subplots(figsize=(7, 6))
-    TTmin, TTmax = TTILDEArr.min(), TTILDEArr.max()
-    mubmin, mubmax = mubTILDEArr.min(), mubTILDEArr.max()
-    ax.scatter(A[:, 0], A[:, 1], s=1, color="red", label="Above")
-    ax.scatter(B[:, 0], B[:, 1], s=1, color="blue", label="Below")
-    ax.scatter(C[:, 0], C[:, 1], s=1, color="green", label="Cross")
-    ax.scatter(
-        ToEN(TTILDEArr, mubTILDEArr)[0],
-        ToEN(TTILDEArr, mubTILDEArr)[1],
-        s=1.0,
-        color="black",
-        alpha=0.1,
-        label="Grid points",
+    geo_df_above = gpd.GeoDataFrame(
+        eos_above.copy(), geometry=gpd.points_from_xy(TildeT_above, muBtilde_above)
     )
-    ax.scatter(ToEN(TTmin, mubmin)[0], ToEN(TTmin, mubmin)[1], s=20, color="black")
-    ax.scatter(ToEN(TTmin, mubmax)[0], ToEN(TTmin, mubmax)[1], s=20, color="black")
-    ax.scatter(ToEN(TTmax, mubmin)[0], ToEN(TTmax, mubmin)[1], s=20, color="black")
-    ax.scatter(ToEN(TTmax, mubmax)[0], ToEN(TTmax, mubmax)[1], s=20, color="black")
-    ax.set_xlabel("e [GeV/fm^3]")
-    ax.set_ylabel("nB [1/fm^3]")
-    ax.legend()
-    plt.show()
-
-
-def plot_tilde_plane(
-    TTilA, muBBtilA, TTilB, muBBtilB, TTilC, muBBtilC, TTILDEArr, mubTILDEArr
-):
-    TT_mesh, mub_mesh = np.meshgrid(TTILDEArr, mubTILDEArr, indexing="xy")
-    fig, ax = plt.subplots(figsize=(7, 6))
-    ax.scatter(
-        TT_mesh.ravel(),
-        mub_mesh.ravel(),
-        s=0.3,
-        color="black",
-        alpha=0.1,
-        label="Grid points",
+    geo_df_below = gpd.GeoDataFrame(
+        eos_below.copy(), geometry=gpd.points_from_xy(TildeT_below, muBtilde_below)
     )
-    ax.scatter(TTilA, muBBtilA, s=1, color="red", label="Above")
-    ax.scatter(TTilB, muBBtilB, s=1, color="blue", label="Below")
-    ax.scatter(TTilC, muBBtilC, s=1, color="green", label="Cross")
-    ax.set_xlabel("Ttilde [GeV]")
-    ax.set_ylabel("muBtilde [GeV]")
-    ax.legend()
-    plt.show()
+    geo_df_cross = gpd.GeoDataFrame(
+        eos_cross.copy(), geometry=gpd.points_from_xy(TildeT_cross, muBtilde_cross)
+    )
+
+    poly_above = geo_df_above.union_all().convex_hull
+    poly_below = geo_df_below.union_all().convex_hull
+    poly_cross = geo_df_cross.union_all().convex_hull
+
+    poly_below_clean = poly_below
+
+    poly_above_clean = poly_above
+    poly_cross_clean = poly_cross
+
+    poly_above_gdf = gpd.GeoDataFrame(geometry=[poly_above_clean])
+    poly_below_gdf = gpd.GeoDataFrame(geometry=[poly_below_clean])
+    poly_cross_gdf = gpd.GeoDataFrame(geometry=[poly_cross_clean])
+
+    return poly_above_gdf, poly_below_gdf, poly_cross_gdf
+
+
+def create_interpolator(points, values):
+    return LinearNDInterpolator(points, values, fill_value=np.nan)
 
 
 def run_merger(EoS_above, EoS_below, EoS_cross, TrLine, datS, out_path, Ne, Nn):
@@ -315,7 +295,9 @@ def run_merger(EoS_above, EoS_below, EoS_cross, TrLine, datS, out_path, Ne, Nn):
     B = readTable(EoS_below)
     C = readTable(EoS_cross)
     datTRLine = readTable(TrLine)
-    datS = readTable(datS)
+    datS = readTable(
+        datS
+    )  # T [GeV] muB [GeV] eH [GeV/fm3] nBH [1/fm3] eQ [GeV/fm3] nBQ [1/fm3] pH [GeV/fm3] sH [1/fm3] pQ [GeV/fm3] sQ [1/fm3]
 
     # define interpolators
     # Transition line (do not extrapolate: return NaN outside domain)
@@ -327,29 +309,20 @@ def run_merger(EoS_above, EoS_below, EoS_cross, TrLine, datS, out_path, Ne, Nn):
         fill_value=np.nan,
     )  # convert MeV -> GeV, NaN outside
 
-    # Cross
-    pointsC = C[:, :2]
-    valuesC = C[:, 2]
+    TC = create_interpolator(C[:, :2], C[:, 2])
+    muBC = create_interpolator(C[:, :2], C[:, 3])
+    PC = create_interpolator(C[:, :2], C[:, 4])
+    SC = create_interpolator(C[:, :2], C[:, 5])
 
-    TC = LinearNDInterpolator(pointsC, valuesC, fill_value=np.nan)
-    valuesMC = C[:, 3]
-    muBC = LinearNDInterpolator(pointsC, valuesMC, fill_value=np.nan)
+    TB = create_interpolator(B[:, :2], B[:, 2])
+    muBB = create_interpolator(B[:, :2], B[:, 3])
+    PB = create_interpolator(B[:, :2], B[:, 4])
+    SB = create_interpolator(B[:, :2], B[:, 5])
 
-    # Below
-    pointsB = B[:, :2]
-    valuesB = B[:, 2]
-
-    TB = LinearNDInterpolator(pointsB, valuesB, fill_value=np.nan)
-    valuesMB = B[:, 3]
-    muBB = LinearNDInterpolator(pointsB, valuesMB, fill_value=np.nan)
-
-    # Above
-    pointsA = A[:, :2]
-    valuesA = A[:, 2]
-
-    TA = LinearNDInterpolator(pointsA, valuesA, fill_value=np.nan)
-    valuesMA = A[:, 3]
-    muBA = LinearNDInterpolator(pointsA, valuesMA, fill_value=np.nan)
+    TA = create_interpolator(A[:, :2], A[:, 2])
+    muBA = create_interpolator(A[:, :2], A[:, 3])
+    PA = create_interpolator(A[:, :2], A[:, 4])
+    SA = create_interpolator(A[:, :2], A[:, 5])
 
     TTilA, muBBtilA = Get2DTilde(A[:, 0], A[:, 1])
     TTilB, muBBtilB = Get2DTilde(B[:, 0], B[:, 1])
@@ -372,11 +345,6 @@ def run_merger(EoS_above, EoS_below, EoS_cross, TrLine, datS, out_path, Ne, Nn):
     triB = _make_triangulation(ptsB_tilde)
     triC = _make_triangulation(ptsC_tilde)
 
-    # KD-trees (fallback by nearest region)
-    treeA = cKDTree(ptsA_tilde) if ptsA_tilde.size else None
-    treeB = cKDTree(ptsB_tilde) if ptsB_tilde.size else None
-    treeC = cKDTree(ptsC_tilde) if ptsC_tilde.size else None
-
     TTil_min = float(min(TTilA.min(), TTilB.min(), TTilC.min()))
     TTil_max = float(max(TTilA.max(), TTilB.max(), TTilC.max()))
     muBBtil_min = float(min(muBBtilA.min(), muBBtilB.min(), muBBtilC.min()))
@@ -385,21 +353,26 @@ def run_merger(EoS_above, EoS_below, EoS_cross, TrLine, datS, out_path, Ne, Nn):
     TTILDEArr = np.linspace(TTil_min, TTil_max, Ne)
     mubTILDEArr = np.linspace(muBBtil_min, muBBtil_max, Nn)
 
+    # Create GeoDataFrames and polygons
+    poly_above_gdf, poly_below_gdf, poly_cross_gdf = create_geodataframes_and_polygons(
+        A, B, C
+    )
+
     # plot_T_mub_plane(A, B, C)
     # Main loop - create MergedEoS.dat
     print(f"Writing merged EoS to {out_path} ...")
 
     with open(out_path, "w") as f:
-        f.write("# e nb Ttilde muBtilde T muB chi chi_e chi_n\n")
+        f.write("# e nb Ttilde muBtilde T muB P S chi chi_e chi_n\n")
         for Ttilde in TTILDEArr:
             for muBtilde in mubTILDEArr:
                 e, nB = ToEN(Ttilde, muBtilde)
                 res = find_closest_transition(e, nB, datS)
                 if res[0] is not False:
-                    T, muB, chi, chi_e, chi_n = res
+                    T, muB, P, S, chi, chi_e, chi_n = res
                 else:
                     # fallback: use interpolators to decide region
-                    T, muB, chi = GetGoodTmuB(
+                    T, muB, P, S, chi = GetGoodTmuB(
                         TC,
                         TA,
                         TB,
@@ -412,19 +385,30 @@ def run_merger(EoS_above, EoS_below, EoS_cross, TrLine, datS, out_path, Ne, Nn):
                         triA,
                         triB,
                         triC,
-                        treeA,
-                        treeB,
-                        treeC,
+                        PC,
+                        PB,
+                        PA,
+                        SC,
+                        SB,
+                        SA,
                     )
+                    point = Point(Get2DTilde(e, nB))
+                    if poly_below_gdf.geometry.iloc[0].contains(point) and (
+                        chi == 1 or chi == -1
+                    ):
+                        continue
+
                     chi_e = None
                     chi_n = None
                     if T is False:
                         continue
                 chi_e_val = chi_e if chi_e is not None else np.nan
                 chi_n_val = chi_n if chi_n is not None else np.nan
+                P_val = P if P is not None else np.nan
+                S_val = S if S is not None else np.nan
 
                 f.write(
-                    f"{e:.6e} {nB:.6e} {Ttilde:.6e} {muBtilde:.6e} {T:.6e} {muB:.6e} {chi:.6e} {chi_e_val:.6e} {chi_n_val:.6e}\n"
+                    f"{e:.6e} {nB:.6e} {Ttilde:.6e} {muBtilde:.6e} {T:.6e} {muB:.6e} {P_val:.6e} {S_val:.6e} {chi:.6e} {chi_e_val:.6e} {chi_n_val:.6e} \n"
                 )
 
     print("... done.")
