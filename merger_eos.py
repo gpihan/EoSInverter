@@ -2,40 +2,42 @@
 import argparse
 import sys
 
-import geopandas as gpd
 import numpy as np
 import pandas as pd
 from scipy.interpolate import LinearNDInterpolator, interp1d
 from scipy.spatial import Delaunay
-from shapely.geometry import Point
+from shapely.geometry import MultiPoint, Point
 
 """
-Merge three EoS tables (above/below/crossover) into a unified map (e, nB) -> (T, muB, chi).
-python3 merger_eos.py \
-  --above output/EoSAbove_clean.dat \
-  --below output/EoSBelow_clean.dat \
-  --cross output/EoSCross_clean.dat \
-  --trline input/TransitionLine.dat \
-  --regions input/RegionS.dat \
-  --out output/MergedEoS.dat \
-  --Ne 100 --Nn 100
+Merge three EoS tables (above/below/crossover) into a unified map (e, nB) -> thermodynamic fields.
+
+Example:
+    python3 merger_eos.py \
+        --above output/EoSAbove_clean.dat \
+        --below output/EoSBelow_clean.dat \
+        --cross output/EoSCross_clean.dat \
+        --trline input/TransitionLine.dat \
+        --regions input/RegionS.dat \
+        --out output/MergedEoS.dat \
+        --Ne 100 --Nn 100
+
 Inputs (text files):
-  - EoS_above.dat   : columns [e, nB, T, muB]
-  - EoS_below.dat   : columns [e, nB, T, muB]
-  - EoS_cross.dat   : columns [e, nB, T, muB]
-  - TransitionLine.dat : columns [muB(MeV), T(MeV)]  — definition of 1st order line
-  - RegionS.dat     : columns [Tc(GeV), muBc(GeV), eH, nBH, eQ, nBQ] — from FindVals.py
+    - EoS_above.dat : columns [e, nB, T, muB] with optional [P, S] in columns 5-6
+    - EoS_below.dat : columns [e, nB, T, muB] with optional [P, S]
+    - EoS_cross.dat : columns [e, nB, T, muB] with optional [P, S]
+    - TransitionLine.dat : columns [muB(MeV), T(MeV)] - definition of 1st-order line (loaded in MeV, converted to GeV)
+    - RegionS.dat : columns [Tc(GeV), muBc(GeV), eH, nBH, eQ, nBQ] with optional [pH, sH, pQ, sQ]
 
 Output:
-    - MergedEoS.dat : columns [e, nB, T, muB, P, S, chi]
-      chi = 0.0  -> hadron (below)
-      chi = 1.0  -> QGP (above)
-      chi = -1.0 -> crossover
-      0..1       -> smooth mixture fraction along H–Q transition segment
+    - MergedEoS.dat : columns [e, nB, Ttilde, muBtilde, T, muB, P, S, chi, chi_e, chi_n]
+        chi = 0.0  -> hadron (below)
+        chi = 1.0  -> QGP (above)
+        chi = -1.0 -> crossover
+        0..1       -> smooth mixture fraction along H-Q transition segment (projection parameter)
 
 Notes:
-  - Temperatures and chemical potentials are in GeV.
-  - TransitionLine.dat is loaded in MeV and converted to GeV (division by 1000).
+    - Temperatures and chemical potentials are in GeV.
+    - TransitionLine.dat is loaded in MeV and converted to GeV (division by 1000).
 """
 
 
@@ -53,6 +55,32 @@ def parse_args(argv=None):
     p.add_argument("--out", default="MergedEoS.dat", help="output file")
     p.add_argument("--Ne", type=int, default=400, help="number of steps in e axis")
     p.add_argument("--Nn", type=int, default=200, help="number of steps in nB axis")
+
+    # Misc
+    p.add_argument(
+        "--progress",
+        action="store_true",
+        help="Print simple progress updates during merging",
+    )
+
+    # Transition proximity and hull enforcement
+    p.add_argument(
+        "--seg-dist-max",
+        type=float,
+        default=None,
+        help="Maximum allowed absolute distance in (e,nB) from the nearest transition segment to apply RegionS (default: None = no limit)",
+    )
+    p.add_argument(
+        "--seg-norm-dist-max",
+        type=float,
+        default=0.15,
+        help="Maximum normalized distance d/L (distance to segment divided by its length) to apply RegionS (default: 0.15)",
+    )
+    p.add_argument(
+        "--enforce-hulls",
+        action="store_true",
+        help="Skip points outside the convex hulls in the (T~,muB~) plane of all three tables (A/B/C)",
+    )
 
     return p.parse_args(argv)
 
@@ -130,10 +158,12 @@ def GetGoodTmuB(
     TTilde, muBTilde = Get2DTilde(e, nB)
 
     p = np.array([TTilde, muBTilde])
-
     try:
         if triC is not None and (triC.find_simplex(p) >= 0):
-            Tc, muBc, Pc, Sc = TC(e, nB), muBC(e, nB), PC(e, nB), SC(e, nB)
+            Tc = TC(e, nB)
+            muBc = muBC(e, nB)
+            Pc = PC(e, nB) if PC is not None else None
+            Sc = SC(e, nB) if SC is not None else None
             if CheckC(Tc, muBc):
                 return Tc, muBc, Pc, Sc, -1
     except Exception:
@@ -141,7 +171,10 @@ def GetGoodTmuB(
 
     try:
         if triB is not None and (triB.find_simplex(p) >= 0):
-            Tb, muBb, Pb, Sb = TB(e, nB), muBB(e, nB), PB(e, nB), SB(e, nB)
+            Tb = TB(e, nB)
+            muBb = muBB(e, nB)
+            Pb = PB(e, nB) if PB is not None else None
+            Sb = SB(e, nB) if SB is not None else None
             if CheckB(Tb, muBb, TrLine):
                 return Tb, muBb, Pb, Sb, 0
     except Exception:
@@ -149,7 +182,10 @@ def GetGoodTmuB(
 
     try:
         if triA is not None and (triA.find_simplex(p) >= 0):
-            Ta, muBa, Pa, Sa = TA(e, nB), muBA(e, nB), PA(e, nB), SA(e, nB)
+            Ta = TA(e, nB)
+            muBa = muBA(e, nB)
+            Pa = PA(e, nB) if PA is not None else None
+            Sa = SA(e, nB) if SA is not None else None
             if CheckA(Ta, muBa, TrLine):
                 return Ta, muBa, Pa, Sa, 1
     except Exception:
@@ -158,33 +194,27 @@ def GetGoodTmuB(
     return False, False, False, False, False
 
 
-def compute_chi(e, nB, eH, nH, eQ, nQ):
-    chi_e = None
-    chi_n = None
-    if eQ != eH:
-        chi_e = (e - eH) / (eQ - eH)
-    if nQ != nH:
-        chi_n = (nB - nH) / (nQ - nH)
-    # average if both are valid
-    if chi_e is not None and chi_n is not None:
-        chi = 0.3  # * (chi_e + chi_n)
-    else:
-        chi = chi_e if chi_e is not None else chi_n
-    return chi, chi_e, chi_n
+def project_param_and_distance(px, py, x1, y1, x2, y2):
+    """Return (t, d, L) where:
+    - t in [0,1] is the projection parameter of point (px,py) onto the segment [(x1,y1)-(x2,y2)]
+    - d is the Euclidean distance to the projection point
+    - L is the length of the segment
+    """
+    vx, vy = (x2 - x1), (y2 - y1)
+    wx, wy = (px - x1), (py - y1)
+    seg_len2 = vx * vx + vy * vy
+    if seg_len2 == 0.0:
+        return 0.0, float(np.hypot(wx, wy)), 0.0
+    t = (wx * vx + wy * vy) / seg_len2
+    t = float(np.clip(t, 0.0, 1.0))
+    projx = x1 + t * vx
+    projy = y1 + t * vy
+    d = float(np.hypot(px - projx, py - projy))
+    L = float(np.sqrt(seg_len2))
+    return t, d, L
 
 
-def point_to_segment_distance(px, py, x1, y1, x2, y2):
-    seg = np.array([x2 - x1, y2 - y1])
-    pt = np.array([px - x1, py - y1])
-    seg_len2 = np.dot(seg, seg)
-    if seg_len2 == 0:  # degenerate segment
-        return np.linalg.norm(pt)
-    t = max(0, min(1, np.dot(pt, seg) / seg_len2))
-    proj = np.array([x1, y1]) + t * seg
-    return np.linalg.norm([px - proj[0], py - proj[1]])
-
-
-def find_closest_transition(e, nB, table):
+def find_closest_transition(e, nB, table, seg_dist_max=None, seg_norm_dist_max=0.15):
     rows = []
     for i, row in enumerate(table):
         try:
@@ -222,17 +252,35 @@ def find_closest_transition(e, nB, table):
         # T, muB, P, S, chi, chi_e, chi_n
         return False, False, False, False, False, None, None
 
-    # compute distances
+    # compute distances + projection parameter along segment
     dists = []
     for i, Tc_f, muBc_f, eH_f, nBH_f, eQ_f, nBQ_f, pH_f, sH_f, pQ_f, sQ_f in rows:
-        d = point_to_segment_distance(e, nB, eH_f, nBH_f, eQ_f, nBQ_f)
+        t, d, L = project_param_and_distance(e, nB, eH_f, nBH_f, eQ_f, nBQ_f)
+        norm_d = d / max(L, 1e-12)
         dists.append(
-            (d, i, Tc_f, muBc_f, eH_f, nBH_f, eQ_f, nBQ_f, pH_f, sH_f, pQ_f, sQ_f)
+            (
+                d,
+                norm_d,
+                t,
+                i,
+                Tc_f,
+                muBc_f,
+                eH_f,
+                nBH_f,
+                eQ_f,
+                nBQ_f,
+                pH_f,
+                sH_f,
+                pQ_f,
+                sQ_f,
+            )
         )
 
     dists.sort(key=lambda x: x[0])
     (
-        _,
+        d_min,
+        norm_d_min,
+        t_min,
         _,
         Tc_f,
         muBc_f,
@@ -245,7 +293,15 @@ def find_closest_transition(e, nB, table):
         pQ_f,
         sQ_f,
     ) = dists[0]
-    chi, chi_e, chi_nB = compute_chi(e, nB, eH_f, nBH_f, eQ_f, nBQ_f)
+    # Apply distance thresholds (absolute and normalized)
+    if (seg_dist_max is not None) and (d_min > seg_dist_max):
+        return False, False, False, False, False, None, None
+    if (seg_norm_dist_max is not None) and (norm_d_min > seg_norm_dist_max):
+        return False, False, False, False, False, None, None
+    # use projected parameter as chi
+    chi = float(np.clip(t_min, 0.0, 1.0))
+    chi_e = None
+    chi_nB = None
     # Interpolate pressure and entropy along the segment if available
     P = S = None
     if chi is not None and (pH_f is not None) and (pQ_f is not None):
@@ -255,42 +311,44 @@ def find_closest_transition(e, nB, table):
     return Tc_f, muBc_f, P, S, chi, chi_e, chi_nB
 
 
-def create_geodataframes_and_polygons(eos_above, eos_below, eos_cross):
+def create_polygons_tilde(eos_above, eos_below, eos_cross):
+    """Create convex hull polygons in (T~, muB~) plane using shapely only (no GeoPandas).
+
+    Returns shapely geometries (poly_above, poly_below, poly_cross).
+    """
     TildeT_above, muBtilde_above = Get2DTilde(eos_above[:, 0], eos_above[:, 1])
     TildeT_below, muBtilde_below = Get2DTilde(eos_below[:, 0], eos_below[:, 1])
     TildeT_cross, muBtilde_cross = Get2DTilde(eos_cross[:, 0], eos_cross[:, 1])
 
-    geo_df_above = gpd.GeoDataFrame(
-        eos_above.copy(), geometry=gpd.points_from_xy(TildeT_above, muBtilde_above)
-    )
-    geo_df_below = gpd.GeoDataFrame(
-        eos_below.copy(), geometry=gpd.points_from_xy(TildeT_below, muBtilde_below)
-    )
-    geo_df_cross = gpd.GeoDataFrame(
-        eos_cross.copy(), geometry=gpd.points_from_xy(TildeT_cross, muBtilde_cross)
-    )
+    pts_above = MultiPoint(list(zip(TildeT_above, muBtilde_above)))
+    pts_below = MultiPoint(list(zip(TildeT_below, muBtilde_below)))
+    pts_cross = MultiPoint(list(zip(TildeT_cross, muBtilde_cross)))
 
-    poly_above = geo_df_above.union_all().convex_hull
-    poly_below = geo_df_below.union_all().convex_hull
-    poly_cross = geo_df_cross.union_all().convex_hull
+    poly_above = pts_above.convex_hull
+    poly_below = pts_below.convex_hull
+    poly_cross = pts_cross.convex_hull
 
-    poly_below_clean = poly_below
-
-    poly_above_clean = poly_above
-    poly_cross_clean = poly_cross
-
-    poly_above_gdf = gpd.GeoDataFrame(geometry=[poly_above_clean])
-    poly_below_gdf = gpd.GeoDataFrame(geometry=[poly_below_clean])
-    poly_cross_gdf = gpd.GeoDataFrame(geometry=[poly_cross_clean])
-
-    return poly_above_gdf, poly_below_gdf, poly_cross_gdf
+    return poly_above, poly_below, poly_cross
 
 
 def create_interpolator(points, values):
     return LinearNDInterpolator(points, values, fill_value=np.nan)
 
 
-def run_merger(EoS_above, EoS_below, EoS_cross, TrLine, datS, out_path, Ne, Nn):
+def run_merger(
+    EoS_above,
+    EoS_below,
+    EoS_cross,
+    TrLine,
+    datS,
+    out_path,
+    Ne,
+    Nn,
+    show_progress=False,
+    seg_dist_max=None,
+    seg_norm_dist_max=0.15,
+    enforce_hulls=False,
+):
     A = readTable(EoS_above)
     B = readTable(EoS_below)
     C = readTable(EoS_cross)
@@ -311,18 +369,19 @@ def run_merger(EoS_above, EoS_below, EoS_cross, TrLine, datS, out_path, Ne, Nn):
 
     TC = create_interpolator(C[:, :2], C[:, 2])
     muBC = create_interpolator(C[:, :2], C[:, 3])
-    PC = create_interpolator(C[:, :2], C[:, 4])
-    SC = create_interpolator(C[:, :2], C[:, 5])
+    # Optional P,S columns: only build interpolators if data has >= 6 columns
+    PC = create_interpolator(C[:, :2], C[:, 4]) if C.shape[1] >= 6 else None
+    SC = create_interpolator(C[:, :2], C[:, 5]) if C.shape[1] >= 6 else None
 
     TB = create_interpolator(B[:, :2], B[:, 2])
     muBB = create_interpolator(B[:, :2], B[:, 3])
-    PB = create_interpolator(B[:, :2], B[:, 4])
-    SB = create_interpolator(B[:, :2], B[:, 5])
+    PB = create_interpolator(B[:, :2], B[:, 4]) if B.shape[1] >= 6 else None
+    SB = create_interpolator(B[:, :2], B[:, 5]) if B.shape[1] >= 6 else None
 
     TA = create_interpolator(A[:, :2], A[:, 2])
     muBA = create_interpolator(A[:, :2], A[:, 3])
-    PA = create_interpolator(A[:, :2], A[:, 4])
-    SA = create_interpolator(A[:, :2], A[:, 5])
+    PA = create_interpolator(A[:, :2], A[:, 4]) if A.shape[1] >= 6 else None
+    SA = create_interpolator(A[:, :2], A[:, 5]) if A.shape[1] >= 6 else None
 
     TTilA, muBBtilA = Get2DTilde(A[:, 0], A[:, 1])
     TTilB, muBBtilB = Get2DTilde(B[:, 0], B[:, 1])
@@ -353,25 +412,38 @@ def run_merger(EoS_above, EoS_below, EoS_cross, TrLine, datS, out_path, Ne, Nn):
     TTILDEArr = np.linspace(TTil_min, TTil_max, Ne)
     mubTILDEArr = np.linspace(muBBtil_min, muBBtil_max, Nn)
 
-    # Create GeoDataFrames and polygons
-    poly_above_gdf, poly_below_gdf, poly_cross_gdf = create_geodataframes_and_polygons(
-        A, B, C
-    )
+    # Create polygons in tilde plane (for a few geometric checks)
+    poly_above, poly_below, poly_cross = create_polygons_tilde(A, B, C)
 
-    # plot_T_mub_plane(A, B, C)
-    # Main loop - create MergedEoS.dat
     print(f"Writing merged EoS to {out_path} ...")
 
     with open(out_path, "w") as f:
         f.write("# e nb Ttilde muBtilde T muB P S chi chi_e chi_n\n")
-        for Ttilde in TTILDEArr:
+        for i_T, Ttilde in enumerate(TTILDEArr):
+            if show_progress and (i_T % max(1, Ne // 10) == 0):
+                print(f"Progress: {i_T}/{Ne} rows ({100.0 * i_T / max(1, Ne):.1f}%)")
             for muBtilde in mubTILDEArr:
                 e, nB = ToEN(Ttilde, muBtilde)
-                res = find_closest_transition(e, nB, datS)
+                res = find_closest_transition(
+                    e,
+                    nB,
+                    datS,
+                    seg_dist_max=seg_dist_max,
+                    seg_norm_dist_max=seg_norm_dist_max,
+                )
                 if res[0] is not False:
                     T, muB, P, S, chi, chi_e, chi_n = res
                 else:
                     # fallback: use interpolators to decide region
+                    if enforce_hulls:
+                        pt_tilde = Point(Get2DTilde(e, nB))
+                        if not (
+                            poly_above.covers(pt_tilde)
+                            or poly_below.covers(pt_tilde)
+                            or poly_cross.covers(pt_tilde)
+                        ):
+                            continue
+
                     T, muB, P, S, chi = GetGoodTmuB(
                         TC,
                         TA,
@@ -392,10 +464,11 @@ def run_merger(EoS_above, EoS_below, EoS_cross, TrLine, datS, out_path, Ne, Nn):
                         SB,
                         SA,
                     )
+
                     point = Point(Get2DTilde(e, nB))
-                    if poly_below_gdf.geometry.iloc[0].contains(point) and (
-                        chi == 1 or chi == -1
-                    ):
+                    # If classified as purely hadron or crossover while lying inside the below convex hull,
+                    # skip as likely inconsistent
+                    if poly_below.contains(point) and (chi == 1 or chi == -1):
                         continue
 
                     chi_e = None
@@ -434,6 +507,10 @@ def main(argv):
         out_path,
         Ne,
         Nn,
+        show_progress=args.progress,
+        seg_dist_max=args.seg_dist_max,
+        seg_norm_dist_max=args.seg_norm_dist_max,
+        enforce_hulls=args.enforce_hulls,
     )
 
 
