@@ -63,25 +63,12 @@ def parse_args(argv=None):
         help="Print simple progress updates during merging",
     )
 
-    # Transition proximity and hull enforcement
-    p.add_argument(
-        "--seg-dist-max",
-        type=float,
-        default=None,
-        help="Maximum allowed absolute distance in (e,nB) from the nearest transition segment to apply RegionS (default: None = no limit)",
-    )
     p.add_argument(
         "--seg-norm-dist-max",
         type=float,
         default=0.15,
         help="Maximum normalized distance d/L (distance to segment divided by its length) to apply RegionS (default: 0.15)",
     )
-    p.add_argument(
-        "--enforce-hulls",
-        action="store_true",
-        help="Skip points outside the convex hulls in the (T~,muB~) plane of all three tables (A/B/C)",
-    )
-
     return p.parse_args(argv)
 
 
@@ -92,7 +79,7 @@ def readTable(EoS_path):
 
 def ToEN(Tt, mbt):
     e = 19 * np.pi**2 / 12 * Tt**4
-    nb = 1 / 5 * (mbt * Tt**2)
+    nb = 1 / 3 * (mbt * Tt**2)
     return e, nb
 
 
@@ -107,7 +94,7 @@ def CheckB(T, mub, TrLine):
         return (
             (not np.isnan(T))
             and (not np.isnan(mub))
-            and (mub > 0.4)
+            and (mub >= 0.4)
             and (T < TrLine(mub))
         )
     except Exception:
@@ -119,7 +106,7 @@ def CheckA(T, mub, TrLine):
         return (
             (not np.isnan(T))
             and (not np.isnan(mub))
-            and (mub > 0.4)
+            and (mub >= 0.4)
             and (T > TrLine(mub))
         )
     except Exception:
@@ -195,11 +182,6 @@ def GetGoodTmuB(
 
 
 def project_param_and_distance(px, py, x1, y1, x2, y2):
-    """Return (t, d, L) where:
-    - t in [0,1] is the projection parameter of point (px,py) onto the segment [(x1,y1)-(x2,y2)]
-    - d is the Euclidean distance to the projection point
-    - L is the length of the segment
-    """
     vx, vy = (x2 - x1), (y2 - y1)
     wx, wy = (px - x1), (py - y1)
     seg_len2 = vx * vx + vy * vy
@@ -214,7 +196,7 @@ def project_param_and_distance(px, py, x1, y1, x2, y2):
     return t, d, L
 
 
-def find_closest_transition(e, nB, table, seg_dist_max=None, seg_norm_dist_max=0.15):
+def find_closest_transition(e, nB, table, seg_norm_dist_max=10):
     rows = []
     for i, row in enumerate(table):
         try:
@@ -226,11 +208,6 @@ def find_closest_transition(e, nB, table, seg_dist_max=None, seg_norm_dist_max=0
                 pH, sH, pQ, sQ = row[6:10]
             eH_f, nBH_f, eQ_f, nBQ_f = float(eH), float(nBH), float(eQ), float(nBQ)
         except Exception:
-            continue
-        if not (
-            (min(eH_f, eQ_f) <= e <= max(eH_f, eQ_f))
-            and (min(nBH_f, nBQ_f) <= nB <= max(nBH_f, nBQ_f))
-        ):
             continue
         rows.append(
             (
@@ -249,10 +226,8 @@ def find_closest_transition(e, nB, table, seg_dist_max=None, seg_norm_dist_max=0
         )
 
     if len(rows) == 0:
-        # T, muB, P, S, chi, chi_e, chi_n
         return False, False, False, False, False, None, None
 
-    # compute distances + projection parameter along segment
     dists = []
     for i, Tc_f, muBc_f, eH_f, nBH_f, eQ_f, nBQ_f, pH_f, sH_f, pQ_f, sQ_f in rows:
         t, d, L = project_param_and_distance(e, nB, eH_f, nBH_f, eQ_f, nBQ_f)
@@ -294,12 +269,9 @@ def find_closest_transition(e, nB, table, seg_dist_max=None, seg_norm_dist_max=0
         sQ_f,
     ) = dists[0]
     # Apply distance thresholds (absolute and normalized)
-    if (seg_dist_max is not None) and (d_min > seg_dist_max):
-        return False, False, False, False, False, None, None
     if (seg_norm_dist_max is not None) and (norm_d_min > seg_norm_dist_max):
         return False, False, False, False, False, None, None
-    # use projected parameter as chi
-    chi = float(np.clip(t_min, 0.0, 1.0))
+    chi = float(np.clip(t_min, 0.0, 1.0))  # Use actual projection parameter
     chi_e = None
     chi_nB = None
     # Interpolate pressure and entropy along the segment if available
@@ -335,6 +307,15 @@ def create_interpolator(points, values):
     return LinearNDInterpolator(points, values, fill_value=np.nan)
 
 
+def _make_triangulation(pts):
+    try:
+        if pts.shape[0] >= 3:
+            return Delaunay(pts)
+    except Exception:
+        return None
+    return None
+
+
 def run_merger(
     EoS_above,
     EoS_below,
@@ -345,9 +326,7 @@ def run_merger(
     Ne,
     Nn,
     show_progress=False,
-    seg_dist_max=None,
     seg_norm_dist_max=0.15,
-    enforce_hulls=False,
 ):
     A = readTable(EoS_above)
     B = readTable(EoS_below)
@@ -392,14 +371,6 @@ def run_merger(
     ptsB_tilde = np.column_stack((TTilB, muBBtilB))
     ptsC_tilde = np.column_stack((TTilC, muBBtilC))
 
-    def _make_triangulation(pts):
-        try:
-            if pts.shape[0] >= 3:
-                return Delaunay(pts)
-        except Exception:
-            return None
-        return None
-
     triA = _make_triangulation(ptsA_tilde)
     triB = _make_triangulation(ptsB_tilde)
     triC = _make_triangulation(ptsC_tilde)
@@ -428,21 +399,12 @@ def run_merger(
                     e,
                     nB,
                     datS,
-                    seg_dist_max=seg_dist_max,
                     seg_norm_dist_max=seg_norm_dist_max,
                 )
                 if res[0] is not False:
                     T, muB, P, S, chi, chi_e, chi_n = res
                 else:
                     # fallback: use interpolators to decide region
-                    if enforce_hulls:
-                        pt_tilde = Point(Get2DTilde(e, nB))
-                        if not (
-                            poly_above.covers(pt_tilde)
-                            or poly_below.covers(pt_tilde)
-                            or poly_cross.covers(pt_tilde)
-                        ):
-                            continue
 
                     T, muB, P, S, chi = GetGoodTmuB(
                         TC,
@@ -464,17 +426,17 @@ def run_merger(
                         SB,
                         SA,
                     )
-
-                    point = Point(Get2DTilde(e, nB))
-                    # If classified as purely hadron or crossover while lying inside the below convex hull,
-                    # skip as likely inconsistent
-                    if poly_below.contains(point) and (chi == 1 or chi == -1):
-                        continue
-
                     chi_e = None
                     chi_n = None
                     if T is False:
                         continue
+
+                point = Point(Get2DTilde(e, nB))
+                # If classified as purely hadron or crossover while lying inside the below convex hull,
+                # skip as likely inconsistent
+                if poly_below.contains(point) and (chi == 1 or chi == -1):
+                    continue
+
                 chi_e_val = chi_e if chi_e is not None else np.nan
                 chi_n_val = chi_n if chi_n is not None else np.nan
                 P_val = P if P is not None else np.nan
@@ -508,9 +470,7 @@ def main(argv):
         Ne,
         Nn,
         show_progress=args.progress,
-        seg_dist_max=args.seg_dist_max,
         seg_norm_dist_max=args.seg_norm_dist_max,
-        enforce_hulls=args.enforce_hulls,
     )
 
 
