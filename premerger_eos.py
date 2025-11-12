@@ -1,13 +1,9 @@
 import os
+import sys
 
 import numpy as np
-import pandas as pd
 from scipy.interpolate import interp1d
-
-
-def readTable(EoS_path):
-    df = pd.read_csv(EoS_path, sep="\s+", comment="#", header=None)
-    return df.to_numpy()
+from utils import read_parameters, readTable
 
 
 def project_eos_columns(arr, e_i, nb_i, T_i, muB_i):
@@ -62,10 +58,10 @@ def check_boundary_overlap(
     T_tolerance=1e-5,
     muB_atol=1e-9,
 ):
-    """Najde hraniční překryv mezi above a cross pro minimální/maximum muB.
+    """Find boundary overlap between above and cross for minimum/maximum muB.
 
-    Vrací množinu klíčů (e, nb, T) bodů z ABOVE, které je vhodné odstranit
-    kvůli překryvu s CROSS na hraničních řezech.
+    Returns a set of keys (e, nb, T) of points from ABOVE that should be removed
+    due to overlap with CROSS at boundary slices.
     """
     if eos_above_raw.size == 0 or eos_cross_raw.size == 0:
         return set()
@@ -115,7 +111,7 @@ def check_boundary_overlap(
 
 
 def remove_rows_by_keys(arr, remove_keys, e_i, nb_i, T_i):
-    """Odstraní řádky z numpy pole na základě klíčů (e, nb, T)."""
+    """Remove rows from numpy array based on keys (e, nb, T)."""
     if not remove_keys or len(arr) == 0:
         return arr
 
@@ -129,16 +125,16 @@ def remove_rows_by_keys(arr, remove_keys, e_i, nb_i, T_i):
 
 
 def filter_array_by_mask(arr, mask):
-    """Filtruje numpy pole podle masky."""
+    """Filter numpy array by mask."""
     return arr[mask] if len(arr) > 0 else arr
 
 
 def pick_extreme_nb_by_e(arr, e_i, nb_i, pick_max=True):
-    """Pro každou hodnotu e vybere řádek s max/min nb."""
+    """For each e value, select the row with max/min nb."""
     if len(arr) == 0:
         return arr
 
-    # Seskupíme podle e hodnot
+    # Group by e values
     unique_e = np.unique(arr[:, e_i])
     selected_rows = []
 
@@ -157,19 +153,32 @@ def pick_extreme_nb_by_e(arr, e_i, nb_i, pick_max=True):
 
 
 def save_array_to_file(arr, file_path):
-    """Uloží numpy pole do souboru jako TSV."""
+    """Save numpy array to file as TSV."""
     np.savetxt(file_path, arr, delimiter="\t", fmt="%.12g")
 
 
-def main():
+def main(argv):
     """Clean and merge EoS data with robust filters and parametrized paths."""
     script_dir = os.path.dirname(os.path.abspath(__file__))
 
-    transition_path = os.path.join(script_dir, "input/TransitionLine.dat")
-    above_path = os.path.join(script_dir, "EoSAboveGeV/EoS_all.dat")
-    below_path = os.path.join(script_dir, "EoSBelowGeV/EoS_all.dat")
-    cross_path = os.path.join(script_dir, "EoSCrossGeV/EoS_all.dat")
-    output_dir = os.path.join(script_dir, "output-test")
+    try:
+        param_path = sys.argv[1]
+    except FileNotFoundError:
+        print("Parameter file is not found or specified.")
+        sys.exit()
+
+    Param = read_parameters(param_path)
+
+    EoS_above = os.path.join(Param["EoS_above"])
+    EoS_below = Param["EoS_below"]
+    EoS_cross = Param["EoS_cross"]
+    TrLine = Param["TransitionLine"]
+    output = Param["premerger_output"]
+    transition_path = os.path.join(script_dir, TrLine)
+    above_path = os.path.join(script_dir, EoS_above)
+    below_path = os.path.join(script_dir, EoS_below)
+    cross_path = os.path.join(script_dir, EoS_cross)
+    output_dir = os.path.join(script_dir, output)
 
     col_e = 0
     col_nb = 1
@@ -179,10 +188,8 @@ def main():
     muB_atol = 1e-9
     nb_tolerance = 1e-4
     T_tolerance = 1e-4
-    tildeT_min = 0.04
     line_tol = 10e-5
     T_max = None
-    verbose = True
 
     os.makedirs(output_dir, exist_ok=True)
 
@@ -208,13 +215,6 @@ def main():
     ncols_above = eos_above_raw_full.shape[1] if eos_above_raw_full.ndim == 2 else 0
     ncols_below = eos_below_raw_full.shape[1] if eos_below_raw_full.ndim == 2 else 0
     ncols_cross = eos_cross_raw_full.shape[1] if eos_cross_raw_full.ndim == 2 else 0
-    if verbose:
-        print(
-            "EoS shapes (all columns preserved):",
-            f"above={eos_above_raw_full.shape}",
-            f"below={eos_below_raw_full.shape}",
-            f"cross={eos_cross_raw_full.shape}",
-        )
 
     # Overlap removal between above and cross at boundary
     overlapping_points = check_boundary_overlap(
@@ -271,34 +271,7 @@ def main():
     else:
         eos_cross_filtered = eos_cross_raw_full
 
-    # BELOW: remove rows at minimal T (T_min) with tolerance
-    if len(eos_below_filtered) > 0:
-        T_min_below = float(np.nanmin(eos_below_filtered[:, col_T]))
-        T_is_min = np.isclose(
-            eos_below_filtered[:, col_T], T_min_below, atol=T_tolerance
-        )
-        if verbose:
-            cnt_removed = int(np.count_nonzero(T_is_min))
-            if cnt_removed:
-                print(
-                    f"Odstraňuji {cnt_removed} bodů z BELOW na T_min≈{T_min_below:g} (±{T_tolerance})"
-                )
-        eos_below_filtered = filter_array_by_mask(eos_below_filtered, ~T_is_min)
-
-    # BELOW: remove rows with muB≈0.4 and T < 0.056
-    if len(eos_below_filtered) < 0:
-        mub_target = 0.4
-        T_cut = 0.056
-        mu_match = np.isclose(eos_below_filtered[:, col_muB], mub_target, atol=muB_atol)
-        T_low = eos_below_filtered[:, col_T] < T_cut
-        rm_mask = mu_match & T_low
-        if verbose:
-            cnt_removed = int(np.count_nonzero(rm_mask))
-            if cnt_removed:
-                print(
-                    f"Odstraňuji {cnt_removed} bodů z BELOW pro muB≈{mub_target} (±{muB_atol}) a T<{T_cut}"
-                )
-        eos_below_filtered = filter_array_by_mask(eos_below_filtered, ~rm_mask)
+    # Removed specific filtering for BELOW - keeping only general line-based filtering
 
     # muB boundary values
     if len(eos_above_filtered) > 0:
@@ -371,20 +344,7 @@ def main():
         below_mu_max_picked = np.empty((0, ncols_below))
         below_core = np.empty((0, ncols_below))
 
-    # CROSS: filter by TildeT and remove muB min/max slices; then collect boundary slices separately
-    if len(eos_cross_filtered) > 0:
-        Ttilde, _ = Get2DTilde(
-            eos_cross_filtered[:, col_e], eos_cross_filtered[:, col_nb]
-        )
-        keep_tilde = Ttilde > tildeT_min
-        if verbose:
-            skipped = int(np.count_nonzero(~keep_tilde))
-            if skipped:
-                print(
-                    f"Skipping {skipped} points with TildeT < {tildeT_min} GeV in cross EoS"
-                )
-        eos_cross_filtered = filter_array_by_mask(eos_cross_filtered, keep_tilde)
-
+    # CROSS: Only remove muB min slice and do deduplication for max slice
     if len(eos_cross_filtered) > 0:
         cross_mu_min_mask = np.isclose(
             eos_cross_filtered[:, col_muB], mub_cross_min, atol=muB_atol
@@ -398,6 +358,7 @@ def main():
             eos_cross_filtered, ~(cross_mu_min_mask | cross_mu_max_mask)
         )
 
+        # Deduplication: pick extreme nb for each e value at max muB boundary
         cross_mu_max_picked = pick_extreme_nb_by_e(
             cross_mu_max_slice, col_e, col_nb, pick_max=False
         )
@@ -440,17 +401,12 @@ def main():
     save_array_to_file(eos_below_final, os.path.join(output_dir, "EoSBelow_clean.dat"))
     save_array_to_file(eos_cross_final, os.path.join(output_dir, "EoSCross_clean.dat"))
 
-    if verbose:
-        print(
-            f"Uloženo: {os.path.join(output_dir, 'EoSAbove_clean.dat')} ({len(eos_above_final)})"
-        )
-        print(
-            f"Uloženo: {os.path.join(output_dir, 'EoSBelow_clean.dat')} ({len(eos_below_final)})"
-        )
-        print(
-            f"Uloženo: {os.path.join(output_dir, 'EoSCross_clean.dat')} ({len(eos_cross_final)})"
-        )
-
 
 if __name__ == "__main__":
-    main()
+    try:
+        status = main(sys.argv[1:])
+    except Exception as e:
+        print(f"Error: {e}")
+        print("Invalid arguments.")
+
+    sys.exit()
