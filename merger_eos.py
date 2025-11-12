@@ -1,80 +1,13 @@
 # Copyright Tomáš Poledníček, Gregoire Pihan @ 2025
-import argparse
+import os
 import sys
 
 import numpy as np
-import pandas as pd
 from scipy.interpolate import LinearNDInterpolator, interp1d
 from scipy.spatial import Delaunay
-from shapely.geometry import MultiPoint, Point
+from shapely.geometry import MultiPoint
 
-"""
-Merge three EoS tables (above/below/crossover) into a unified map (e, nB) -> thermodynamic fields.
-
-Example:
-    python3 merger_eos.py \
-        --above output/EoSAbove_clean.dat \
-        --below output/EoSBelow_clean.dat \
-        --cross output/EoSCross_clean.dat \
-        --trline input/TransitionLine.dat \
-        --regions input/RegionS.dat \
-        --out output/MergedEoS.dat \
-        --Ne 100 --Nn 100
-
-Inputs (text files):
-    - EoS_above.dat : columns [e, nB, T, muB] with optional [P, S] in columns 5-6
-    - EoS_below.dat : columns [e, nB, T, muB] with optional [P, S]
-    - EoS_cross.dat : columns [e, nB, T, muB] with optional [P, S]
-    - TransitionLine.dat : columns [muB(MeV), T(MeV)] - definition of 1st-order line (loaded in MeV, converted to GeV)
-    - RegionS.dat : columns [Tc(GeV), muBc(GeV), eH, nBH, eQ, nBQ] with optional [pH, sH, pQ, sQ]
-
-Output:
-    - MergedEoS.dat : columns [e, nB, Ttilde, muBtilde, T, muB, P, S, chi, chi_e, chi_n]
-        chi = 0.0  -> hadron (below)
-        chi = 1.0  -> QGP (above)
-        chi = -1.0 -> crossover
-        0..1       -> smooth mixture fraction along H-Q transition segment (projection parameter)
-
-Notes:
-    - Temperatures and chemical potentials are in GeV.
-    - TransitionLine.dat is loaded in MeV and converted to GeV (division by 1000).
-"""
-
-
-def parse_args(argv=None):
-    p = argparse.ArgumentParser(description="Merge EoS tables into MergedEoS.dat")
-    p.add_argument("--above", default="EoS_above.dat", help="file with 'above' table")
-    p.add_argument("--below", default="EoS_below.dat", help="file with 'below' table")
-    p.add_argument("--cross", default="EoS_cross.dat", help="file with 'cross' table")
-    p.add_argument(
-        "--trline", default="TransitionLine.dat", help="file with 1st order line"
-    )
-    p.add_argument(
-        "--regions", default="RegionS.dat", help="file with H–Q segments (FindVals.py)"
-    )
-    p.add_argument("--out", default="MergedEoS.dat", help="output file")
-    p.add_argument("--Ne", type=int, default=400, help="number of steps in e axis")
-    p.add_argument("--Nn", type=int, default=200, help="number of steps in nB axis")
-
-    # Misc
-    p.add_argument(
-        "--progress",
-        action="store_true",
-        help="Print simple progress updates during merging",
-    )
-
-    p.add_argument(
-        "--seg-norm-dist-max",
-        type=float,
-        default=0.15,
-        help="Maximum normalized distance d/L (distance to segment divided by its length) to apply RegionS (default: 0.15)",
-    )
-    return p.parse_args(argv)
-
-
-def readTable(EoS_path):
-    df = pd.read_csv(EoS_path, sep="\s+", comment="#", header=None)
-    return df.to_numpy()
+from utils import read_parameters, readTable
 
 
 def ToEN(Tt, mbt):
@@ -94,7 +27,7 @@ def CheckB(T, mub, TrLine):
         return (
             (not np.isnan(T))
             and (not np.isnan(mub))
-            and (mub >= 0.4)
+            and (mub >= min_muB_B)
             and (T < TrLine(mub))
         )
     except Exception:
@@ -106,19 +39,19 @@ def CheckA(T, mub, TrLine):
         return (
             (not np.isnan(T))
             and (not np.isnan(mub))
-            and (mub >= 0.4)
+            and (mub >= min_muB_A)
             and (T > TrLine(mub))
         )
     except Exception:
         return False
 
 
-def CheckC(T, muB, Tmin=0.0, Tmax=0.6, muBmin=0.0, muBmax=0.399):
+def CheckC(T, muB):
     return (
         (not np.isnan(T))
         and (not np.isnan(muB))
-        and (Tmin < T < Tmax)
-        and (muBmin < muB < muBmax)
+        and (min_T_C < T < max_T_C)
+        and (min_muB_C < muB < max_muB_C)
     )
 
 
@@ -316,6 +249,23 @@ def _make_triangulation(pts):
     return None
 
 
+def find_min_max(A, B, C):
+    global \
+        min_muB_A, \
+        max_muB_A, \
+        min_muB_B, \
+        max_muB_B, \
+        min_muB_C, \
+        max_muB_C, \
+        min_T_C, \
+        max_T_C
+    min_muB_A, max_muB_A = np.nanmin(A[:, 3]), np.nanmax(A[:, 3])
+    min_muB_B, max_muB_B = np.nanmin(B[:, 3]), np.nanmax(B[:, 3])
+    min_muB_C, max_muB_C = np.nanmin(C[:, 3]), np.nanmax(C[:, 3])
+
+    min_T_C, max_T_C = np.nanmin(C[:, 2]), np.nanmax(C[:, 2])
+
+
 def run_merger(
     EoS_above,
     EoS_below,
@@ -325,7 +275,7 @@ def run_merger(
     out_path,
     Ne,
     Nn,
-    show_progress=False,
+    show_progress,
     seg_norm_dist_max=0.15,
 ):
     A = readTable(EoS_above)
@@ -348,7 +298,6 @@ def run_merger(
 
     TC = create_interpolator(C[:, :2], C[:, 2])
     muBC = create_interpolator(C[:, :2], C[:, 3])
-    # Optional P,S columns: only build interpolators if data has >= 6 columns
     PC = create_interpolator(C[:, :2], C[:, 4]) if C.shape[1] >= 6 else None
     SC = create_interpolator(C[:, :2], C[:, 5]) if C.shape[1] >= 6 else None
 
@@ -361,6 +310,8 @@ def run_merger(
     muBA = create_interpolator(A[:, :2], A[:, 3])
     PA = create_interpolator(A[:, :2], A[:, 4]) if A.shape[1] >= 6 else None
     SA = create_interpolator(A[:, :2], A[:, 5]) if A.shape[1] >= 6 else None
+
+    find_min_max(A, B, C)
 
     TTilA, muBBtilA = Get2DTilde(A[:, 0], A[:, 1])
     TTilB, muBBtilB = Get2DTilde(B[:, 0], B[:, 1])
@@ -384,7 +335,7 @@ def run_merger(
     mubTILDEArr = np.linspace(muBBtil_min, muBBtil_max, Nn)
 
     # Create polygons in tilde plane (for a few geometric checks)
-    poly_above, poly_below, poly_cross = create_polygons_tilde(A, B, C)
+    # poly_above, poly_below, poly_cross = create_polygons_tilde(A, B, C)
 
     print(f"Writing merged EoS to {out_path} ...")
 
@@ -393,7 +344,7 @@ def run_merger(
         for i_T, Ttilde in enumerate(TTILDEArr):
             if show_progress and (i_T % max(1, Ne // 10) == 0):
                 print(f"Progress: {i_T}/{Ne} rows ({100.0 * i_T / max(1, Ne):.1f}%)")
-            for muBtilde in mubTILDEArr:
+            for i_mub, muBtilde in enumerate(mubTILDEArr):
                 e, nB = ToEN(Ttilde, muBtilde)
                 res = find_closest_transition(
                     e,
@@ -428,13 +379,12 @@ def run_merger(
                     )
                     chi_e = None
                     chi_n = None
-                    if T is False:
-                        continue
+                if T is False:
+                    continue
 
-                point = Point(Get2DTilde(e, nB))
-                # If classified as purely hadron or crossover while lying inside the below convex hull,
-                # skip as likely inconsistent
-                if poly_below.contains(point) and (chi == 1 or chi == -1):
+                if muB < 0.02 and T < 0.13:
+                    continue
+                elif muB < 0.4 and T < 0.075:
                     continue
 
                 chi_e_val = chi_e if chi_e is not None else np.nan
@@ -450,30 +400,53 @@ def run_merger(
 
 
 def main(argv):
-    args = parse_args(argv)
-    path_above = args.above
-    path_below = args.below
-    path_cross = args.cross
-    path_trline = args.trline
-    path_regions = args.regions
-    out_path = args.out
-    Ne = args.Ne
-    Nn = args.Nn
+    try:
+        param_path = sys.argv[1]
+    except FileNotFoundError:
+        print("Parameter file is not found or specified.")
+        sys.exit()
+
+    Param = read_parameters(param_path)
+
+    premerger = Param["premerger_eos"]
+
+    if premerger:
+        print("Running premerger EoS cleaning...")
+        EoS_above = os.path.join(Param["premerger_output"], "EoSAbove_clean.dat")
+        EoS_below = os.path.join(Param["premerger_output"], "EoSBelow_clean.dat")
+        EoS_cross = os.path.join(Param["premerger_output"], "EoSCross_clean.dat")
+    else:
+        EoS_above = os.path.join(Param["EoS_above"])
+        EoS_below = os.path.join(Param["EoS_below"])
+        EoS_cross = os.path.join(Param["EoS_cross"])
+    TrLine = os.path.join(Param["TransitionLine"])
+    datS = os.path.join(Param["RegionS"])
+    out_path = Param["OutputMergedEoS"]
+    Ne = Param["Ne"]
+    Nn = Param["Nn"]
+
+    print("Running EoS merger...")
+    print("Grid size: ", Ne * Nn)
 
     run_merger(
-        path_above,
-        path_below,
-        path_cross,
-        path_trline,
-        path_regions,
+        EoS_above,
+        EoS_below,
+        EoS_cross,
+        TrLine,
+        datS,
         out_path,
         Ne,
         Nn,
-        show_progress=args.progress,
-        seg_norm_dist_max=args.seg_norm_dist_max,
+        show_progress=True,
+        seg_norm_dist_max=0.15,
     )
 
 
 if __name__ == "__main__":
-    status = main(sys.argv[1:])
-    sys.exit(status)
+    try:
+        status = main(sys.argv[1:])
+    except Exception as e:
+        print(f"Error: {e}")
+        print("Invalid arguments.")
+
+    sys.exit()
