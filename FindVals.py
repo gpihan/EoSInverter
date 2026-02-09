@@ -2,55 +2,141 @@ import os
 import sys
 
 import numpy as np
-from scipy.interpolate import interp1d
+from scipy.interpolate import UnivariateSpline, interp1d
+from scipy.ndimage import gaussian_filter1d
 
-from utils import read_parameters, readTable
-
-
-def first_index_zero(lst, tol: float = 1e-12):
-    arr = np.asarray(lst)
-    idx = np.where(np.abs(arr) <= tol)[0]
-    return int(idx[0]) if idx.size else None
+from utils import read_parameters
 
 
-def first_index_non_zero(lst, tol: float = 1e-12):
-    arr = np.asarray(lst)
-    idx = np.where(np.abs(arr) > tol)[0]
-    return int(idx[0]) if idx.size else None
+def ToTilde(e, nB):
+    Tt = (12 / 19 / np.pi**2 * e) ** (1 / 4)
+    mbt = 5 * nB / Tt**2
+    return Tt, mbt
 
 
-def deriv(vec):
-    return np.diff(vec)
+def ToEN(Tt, mbt):
+    e = 19 / 12 * np.pi**2 * Tt**4
+    nb = 1 / 5 * mbt * Tt**2
+    return e, nb
 
 
-def GetFirst(lst):
-    arr = np.asarray(lst)
-    diffs = np.abs(arr - arr[0])
-    return first_index_non_zero(diffs, tol=1e-12)
+def smooth_gaussian_uniform(x, y, sigma_x):
+    x = np.asarray(x)
+    y = np.asarray(y)
+
+    dx = np.mean(np.diff(x))
+    sigma_idx = sigma_x / dx
+
+    y_smooth = gaussian_filter1d(y, sigma=sigma_idx, mode="nearest")
+    return y_smooth
 
 
-def infer_grid_shape(arr, t_col=0, mub_col=1, tol=1e-10):
-    nrows = arr.shape[0]
-    T = arr[:, t_col]
-    muB = arr[:, mub_col]
+def FindVals(EoS, TrLine, RegionS):
+    dat = np.loadtxt(EoS)
 
-    diffs = np.abs(np.diff(T))
-    brk = np.where(diffs > tol)[0]
-    NmuB_run = brk[0] + 1 if brk.size else nrows
+    NT = len(np.unique(dat[:, 0]))
+    NmuB = len(np.unique(dat[:, 1]))
+    dat = dat.reshape(NT, NmuB, -1)
 
-    if nrows % NmuB_run == 0:
-        NT = nrows // NmuB_run
-        return NT, NmuB_run
-
-    uniq_muB = np.unique(np.round(muB, 12))
-    NmuB_uniq = uniq_muB.size
-    if nrows % NmuB_uniq == 0:
-        NT = nrows // NmuB_uniq
-        return NT, NmuB_uniq
-
-    raise ValueError(
-        f"Cannot infer grid: nrows={nrows}, NmuB_run={NmuB_run} not dividing, unique muB={NmuB_uniq} not dividing."
+    TrLine = np.loadtxt(TrLine)
+    # Build interpolation with safe boundary handling to avoid tiny FP overflow
+    _x_tr = TrLine[:, 0] / 1000
+    _y_tr = TrLine[:, 1] / 1000
+    TFUNC = interp1d(
+        _x_tr,
+        _y_tr,
+        bounds_error=False,
+        fill_value=(_y_tr[0], _y_tr[-1]),
     )
+
+    shiftT = 0.002
+
+    OUT = []
+
+    for i in range(NmuB):
+        arr = dat[:, i]
+        T = arr[:, 0]
+        muB = arr[:, 1]
+        e = arr[:, 2] * T**4
+        nb = arr[:, 3] * T**3
+
+        mask = (muB >= 0.4) & (muB <= 0.7)
+        Ttrunc = T[mask]
+        etrunc = e[mask]
+        nbtrunc = nb[mask]
+
+        mask2 = Ttrunc <= TFUNC([muB[0] for i in range(len(Ttrunc))]) - shiftT
+        Ttrunc2 = Ttrunc[mask2]
+        etrunc2 = etrunc[mask2]
+        nbtrunc2 = nbtrunc[mask2]
+
+        if len(Ttrunc2) == 0 or len(etrunc2) == 0:
+            continue
+
+        currSpline = UnivariateSpline(Ttrunc2, etrunc2 / Ttrunc2**4, s=0.0)
+        currSplinenb = UnivariateSpline(
+            Ttrunc2, nbtrunc2 / Ttrunc2**3, s=0.0
+        )  # s = 0.0 = linear extrapolation
+        # for the hadron gas, the linear extrapolation yields the best result for parallelism and reproduction of eH, nBH
+
+        Tc = TFUNC(muB[0])
+        eH = currSpline(Tc) * Tc**4
+        nbH = currSplinenb(Tc) * Tc**3
+
+        etrunc_sm = smooth_gaussian_uniform(Ttrunc, etrunc, 0.0008)
+
+        mask4 = Ttrunc >= TFUNC([muB[0] for i in range(len(Ttrunc))]) + 0.004
+        Ttrunc4 = Ttrunc[mask4]
+        etrunc4 = etrunc_sm[mask4]
+        nbtrunc4 = nbtrunc[mask4]
+
+        currSplineA = UnivariateSpline(Ttrunc4, etrunc4 / Ttrunc4**4, s=0.01)
+        currSplinenbA = UnivariateSpline(Ttrunc4, nbtrunc4 / Ttrunc4**3, s=0.0)
+
+        eQ = currSplineA(Tc) * Tc**4
+        nbQ = currSplinenbA(Tc) * Tc**3
+
+        TtH, mbtH = ToTilde(eH, nbH)
+        TtQ, mbtQ = ToTilde(eQ, nbQ)
+
+        OUT.append([TtH, mbtH, TtQ, mbtQ, eH, nbH, eQ, nbQ, Tc, muB[0]])
+
+    OUT = np.array(OUT)
+
+    SortIndexes = np.argsort(OUT[:, 9])
+    X, Y = OUT[SortIndexes, 9], OUT[SortIndexes, 2]
+    splMBTt = UnivariateSpline(X, Y, s=0.00001)
+
+    SortIndexes = np.argsort(OUT[:, 8])
+    X, Y = OUT[SortIndexes, 8], OUT[SortIndexes, 3]
+    splTmbt = UnivariateSpline(X, Y, s=0.00008)
+
+    MT = np.array([[splMBTt(mub), splTmbt(T)] for mub, T in zip(OUT[:, 9], OUT[:, 8])])
+
+    OUT[:, 2] = MT[:, 0]
+    OUT[:, 3] = MT[:, 1]
+    E, N = ToEN(MT[:, 0], MT[:, 1])
+    OUT[:, 6] = E
+    OUT[:, 7] = N
+
+    with open(RegionS, "w") as f:
+        f.write("# T muB muBtildeQGP eHG nBHG eQGP nBQGP \n")
+        for i in range(len(OUT[:, 0])):
+            T, muB, eH, nBH, eQ, nBQ, TtH, mbtH, TtQ, mbtQ = (
+                OUT[i, 8],
+                OUT[i, 9],
+                OUT[i, 4],
+                OUT[i, 5],
+                OUT[i, 6],
+                OUT[i, 7],
+                OUT[i, 0],
+                OUT[i, 1],
+                OUT[i, 2],
+                OUT[i, 3],
+            )
+            f.write(f"{T:5} {muB:5} {eH:5} {nBH:5} {eQ:5} {nBQ:5} \n")
+
+    print(f"Transition region data written to {RegionS}")
 
 
 def main(argv):
@@ -61,147 +147,21 @@ def main(argv):
         sys.exit()
 
     Param = read_parameters(param_path)
-    script_dir = os.path.dirname(os.path.abspath(__file__))
 
-    EoS_A = os.path.join(script_dir, Param["EoS_above_input"])
-    EoS_B = os.path.join(script_dir, Param["EoS_below_input"])
-    TrLine = os.path.join(script_dir, Param["TransitionLine"])
+    EoS = Param["EoS_table"]
 
-    print("Running FindVals.py to generate RegionS.dat...")
-    print(f"EoS above: {EoS_A}")
-    print(f"EoS below: {EoS_B}")
-    print(f"Transition line: {TrLine}")
+    TrLine = os.path.join(Param["TransitionLine"])
+    RegionS = os.path.join(Param["RegionS"])
 
-    Trline = readTable(TrLine)
-    TL = interp1d(Trline[:, 0] / 1000, Trline[:, 1] / 1000)
-
-    EoSB = readTable(EoS_B)
-
-    EoSA = readTable(EoS_A)
-    try:
-        NTB, NmuB = infer_grid_shape(EoSB, t_col=0, mub_col=1)
-
-        EoSB = EoSB.reshape(NTB, NmuB, -1)
-    except ValueError:
-        print("Error inferring grid for EoSBelowGeV.dat:")
-        raise
-
-    TListH = []
-    muBListH = []
-    eHList = []
-    nBHList = []
-    # new: pressure and entropy at H side (below)
-    pHList = []
-    sHList = []
-
-    for imuB in range(NmuB):
-        T = EoSB[:, imuB][:, 0]
-        eps = EoSB[:, imuB][:, 2]
-
-        muB_val = EoSB[:, imuB][:, 1][0]
-
-        ind = len(eps) - GetFirst(eps[::-1]) - 1
-        eH = eps[:ind][-1] * T[:ind][-1] ** 4
-        eHList.append(eH)
-
-        nB = EoSB[:, imuB][:, 3]
-        ind = len(nB) - GetFirst(nB[::-1])
-        nBH = nB[:ind][-1] * T[:ind][-1] ** 3
-        nBHList.append(nBH)
-
-        # pressure p/T^4 -> p [GeV^4]
-        p = EoSB[:, imuB][:, 5]
-        ind_p = len(p) - GetFirst(p[::-1]) - 1
-        pH = p[:ind_p][-1] * T[:ind_p][-1] ** 4
-        pHList.append(pH)
-
-        # entropy s/T^3 -> s [GeV^3]
-        s = EoSB[:, imuB][:, 4]
-        ind_s = len(s) - GetFirst(s[::-1]) - 1
-        sH = s[:ind_s][-1] * T[:ind_s][-1] ** 3
-        sHList.append(sH)
-
-        muBListH.append(muB_val)
-        TListH.append(TL(muB_val))
-
-    try:
-        NTB_A, NmuB_A = infer_grid_shape(EoSA, t_col=0, mub_col=1)
-
-        EoSA = EoSA.reshape(NTB_A, NmuB_A, -1)
-    except ValueError:
-        print("Error inferring grid for EoSAboveGeV.dat:")
-        raise
-
-    eQList = []
-    nBQList = []
-    # new: pressure and entropy at Q side (above)
-    pQList = []
-    sQList = []
-
-    for imuB in range(NmuB_A):
-        T = EoSA[:, imuB][:, 0]
-        eps = EoSA[:, imuB][:, 2]
-
-        ind = GetFirst(eps) - 1
-        eQ = eps[ind:][0] * T[ind:][0] ** 4
-        eQList.append(eQ)
-
-        nB = EoSA[:, imuB][:, 3]
-        ind = GetFirst(nB) - 1
-        nBQ = nB[ind:][0] * T[ind:][0] ** 3
-        nBQList.append(nBQ)
-
-        # pressure p/T^4 -> p [GeV^4]
-        p = EoSA[:, imuB][:, 5]
-        ind_p = GetFirst(p) - 1
-        pQ = p[ind_p:][0] * T[ind_p:][0] ** 4
-        pQList.append(pQ)
-
-        # entropy s/T^3 -> s [GeV^3]
-        s = EoSA[:, imuB][:, 4]
-        ind_s = GetFirst(s) - 1
-        sQ = s[ind_s:][0] * T[ind_s:][0] ** 3
-        sQList.append(sQ)
-
-    # arrays
-
-    eHList = np.array(eHList)
-    nBHList = np.array(nBHList)
-    eQList = np.array(eQList)
-    nBQList = np.array(nBQList)
-    # arrays for new quantities
-    pHList = np.array(pHList)
-    sHList = np.array(sHList)
-    pQList = np.array(pQList)
-    sQList = np.array(sQList)
-
-    with open("RegionS.dat", "w") as f:
-        print(
-            "#T [GeV] muB [GeV] eH [GeV/fm3] nBH [1/fm3] eQ [GeV/fm3] nBQ [1/fm3] pH [GeV/fm3] sH [1/fm3] pQ [GeV/fm3] sQ [1/fm3]",
-            file=f,
-        )
-        for T, muB, eH, nBH, eQ, nBQ, pH, sH, pQ, sQ in zip(
-            TListH,
-            muBListH,
-            eHList,
-            nBHList,
-            eQList,
-            nBQList,
-            pHList,
-            sHList,
-            pQList,
-            sQList,
-        ):
-            f.write(
-                f"{T:5} {muB:5} {eH:5} {nBH:5} {eQ:5} {nBQ:5} {pH:5} {sH:5} {pQ:5} {sQ:5}\n"
-            )
-
-    print("Data saved to RegionS.dat")
+    print(f"Using EoS table: {EoS}")
+    print(f"Using Transition Line data: {TrLine}")
+    print(f"Outputting transition region data to: {RegionS}")
+    FindVals(EoS, TrLine, RegionS)
 
 
 if __name__ == "__main__":
     try:
-        main(sys.argv[1:])
+        status = main(sys.argv[1:])
     except Exception as e:
         print(f"Error: {e}")
         print("Invalid arguments.")

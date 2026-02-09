@@ -1,10 +1,13 @@
 import os
-import numpy as np
-import struct
-import sys
 import pickle
 import shutil
+import struct
+import sys
+
+import numpy as np
+
 from utils import read_parameters
+
 
 def fill_TILDE(DATA):
     d = {}
@@ -35,7 +38,12 @@ Param = read_parameters(param_path)
 dimension = Param["Dimension"]
 solver = Param["hydro_model"]
 
-dim_map = {1: ["T"], 2: ["T", "MUB"], 3: ["T", "MUB", "MUQ"], 4: ["T", "MUB", "MUQ", "MUS"]}
+dim_map = {
+    1: ["T"],
+    2: ["T", "MUB"],
+    3: ["T", "MUB", "MUQ"],
+    4: ["T", "MUB", "MUQ", "MUS"],
+}
 Thermo = dim_map.get(dimension, ["T", "MUB"])
 quantity_keys = {"T": "Ttilde", "MUB": "muBtilde", "MUQ": "muQtilde", "MUS": "muStilde"}
 
@@ -53,7 +61,11 @@ if solver == "MUSIC":
     fields = ["t", "mub", "p", "s"]
     COL = {"t": 0, "mub": 1, "p": 2, "s": 3}
 elif solver == "vHLLE":
-    fields = ["e", "nb", "t", "mub", "p", "s"]
+    # For vHLLE, TEMP_unordered_inversion_*.dat rows are:
+    # e, nB, T, muB, P, S, cs2, chi2, index
+    # EoS_all.dat will therefore contain (in order):
+    # e, nB, T, muB, P, S, cs2, chi2
+    fields = ["e", "nb", "t", "mub", "p", "s", "cs2", "chi2"]
     if dimension >= 3:
         fields.append("muq")
     if dimension == 4:
@@ -68,16 +80,18 @@ if solver == "MUSIC":
     header = write_header(TILDE, Thermo)
     for i in range(NT):
         print(f"Treating case MUSIC: {i}")
-        data = np.loadtxt(os.path.join(target_folder, f"TEMP_unordered_inversion_{i}.dat"))
+        data = np.loadtxt(
+            os.path.join(target_folder, f"TEMP_unordered_inversion_{i}.dat")
+        )
         data = data[np.argsort(data[:, -1])]
         mode = "wb" if i == 0 else "ab"
         for fname in fields:
             with open(f"EoS_{fname}_b.dat", mode) as f:
                 if i == 0:
                     for h in header:
-                        f.write(struct.pack('f', h))
+                        f.write(struct.pack("f", h))
                 for val in data[:, COL[fname]]:
-                    f.write(struct.pack('f', val))
+                    f.write(struct.pack("f", val))
     for f in [f"EoS_{f}_b.dat" for f in fields]:
         shutil.move(f, target_folder)
 
@@ -89,9 +103,9 @@ elif solver == "vHLLE":
             file_path = os.path.join(target_folder, f"TEMP_unordered_inversion_{i}.dat")
             data = np.loadtxt(file_path)
             data = data[np.argsort(data[:, -1])]
-            
+
             num_cols = data.shape[1]
-            used_fields = fields[:num_cols] 
+            used_fields = fields[:num_cols]
 
             for row in data:
                 values = [str(row[COL[f]]) for f in used_fields]

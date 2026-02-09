@@ -18,20 +18,11 @@ general_parameters = {
     "MAXITER": 100,
     "Number_of_cores": 12,
     "hydro_model": "vHLLE",  # MUSIC
-    "EoS_table": "EoSCrossGeV.dat",
-    "OutputFolder": "EoSCrossGeV_test",
-    # Paths to EoS files for merger
-    "EoS_above_input": "EoSAboveGeV.dat",  # input table for inversion above transition line
-    "EoS_below_input": "EoSBelowGeV.dat",  # input table for inversion below transition line
-    "EoS_cross_input": "EoSCrossGeV.dat",  # input table for inversion crossing transition line
-    "premerger_eos": True,  # whether to run premerger EoS inversion (it cleans unphysical regions first)
-    "premerger_output": "output",  # output folder for premerger EoS inversion
-    "EoS_above": "EoS_inv_above.dat",  # output table from inversion above transition line
-    "EoS_below": "EoS_inv_below.dat",  # output table from inversion below transition line
-    "EoS_cross": "EoS_inv_cross.dat",  # output table from inversion crossing transition line
-    "TransitionLine": "TransitionLine.dat",  # path to transition line data
+    "EoS_table": "EoS2DISINGnew.dat",
+    "OutputFolder": "EoS2DISINGnew",
+    "TransitionLine": "TransitionlineFilePar.dat",  # Path to transition line data (muB, T format)
     "RegionS": "RegionS.dat",  # path to transition region S data
-    "OutputMergedEoS": "invMergedEoS_new.dat",  # output merged EoS table
-    "Ne": 400,  # number of points in energy density direction for merged EoS
-    "Nn": 400,  # number of points in baryon density direction for merged EoS
+    "OutputMergedEoS": "invIsing-2DTExS.dat",  # output merged EoS table
+    "NTildeT": 200,  # number of points in energy density direction for merged EoS
+    "NTildemuB": 200,  # number of points in baryon density direction for merged ES
 }

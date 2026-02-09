@@ -1,20 +1,25 @@
 # /usr/bin/env python3
 # Copyright Gregoire Pihan @ 2024
 
-import numpy as np
-import sys
-from scipy import interpolate
 import pickle
+import sys
 from concurrent.futures import ProcessPoolExecutor, as_completed
+
+import numpy as np
+from scipy import interpolate
+
 from utils import read_parameters, readTable
+
 
 def key(iT, ib, Nb=5):
     return iT * Nb + ib
 
+
 def ToEN(Tt, mbt):
     e = 19 * np.pi**2 / 12 * Tt**4
-    nb = 1 / 3 * mbt * Tt**2
+    nb = 1 / 5 * mbt * Tt**2
     return np.array([e, nb])
+
 
 def fill_TILDE(DATA):
     d = {}
@@ -24,6 +29,7 @@ def fill_TILDE(DATA):
     d["Arr"] = np.linspace(DATA[0], DATA[1], DATA[2])
     d["d"] = d["Arr"][1] - d["Arr"][0]
     return d
+
 
 def extract_DATA_from(Arr):
     L = list(set(Arr))
@@ -35,14 +41,17 @@ def extract_DATA_from(Arr):
     d["Arr"] = np.linspace(d["MIN"], d["MAX"], d["n"])
     return d
 
+
 def check_lim(X, XMIN, XMAX, tol=1e-8):
     Inside = [(x >= xmin and x <= xmax) for x, xmin, xmax in zip(X, XMIN, XMAX)]
     OnLow = [np.abs(x - xmin) < tol for x, xmin in zip(X, XMIN)]
     OnHigh = [np.abs(x - xmax) < tol for x, xmax in zip(X, XMAX)]
     return all([(ins or L or H) for ins, L, H in zip(Inside, OnLow, OnHigh)])
 
+
 def get_EN_interpolation_at(TMUS, INTERP):
     return np.array([f(np.array(TMUS))[0] for f in INTERP.values()])
+
 
 def getJacobian(local_TMUS, INTERP, absol_deriv=1e-3, deriv_percent=0.02):
     Jacobian = []
@@ -123,6 +132,7 @@ def binary_search_1d(ed_local, MUs, INTERP, TMU_TABLES, MTP):
             iteration += 1
         return T_mid
 
+
 def binary_search_2d(EN, INTERP, TMU_TABLES, MTP):
     iteration = 0
     ed_local, nB_local = EN[0], EN[1]
@@ -161,7 +171,15 @@ def binary_search_2d(EN, INTERP, TMU_TABLES, MTP):
 
 
 def invert_EOS_tables(
-    T_ID, Ttilde, iBt, TILDE_TABLES, TMU_TABLES, INTERP, MTP, hydro_model, guessSol=[0.05, 0.0]
+    T_ID,
+    Ttilde,
+    iBt,
+    TILDE_TABLES,
+    TMU_TABLES,
+    INTERP,
+    MTP,
+    hydro_model,
+    guessSol=[0.05, 0.0],
 ):
     mbtilde = TILDE_TABLES["MUB"]["Arr"][iBt]
     hyper_index = key(T_ID, iBt, Nb=TILDE_TABLES["MUB"]["n"])
@@ -178,12 +196,46 @@ def invert_EOS_tables(
         success = True
 
     (P_local, s_local) = (f([T_local, muB_local])[0] for f in MTP["INTERP_PS"].values())
+
+    # Optional: speed of sound squared and chi2 from forward EoS
+    cs2_local = None
+    chi2_local = None
+    cs2_interp = MTP.get("INTERP_CS2")
+    chi2_interp = MTP.get("INTERP_CHI2")
+    if cs2_interp is not None:
+        try:
+            cs2_local = cs2_interp([T_local, muB_local])[0]
+        except Exception:
+            cs2_local = None
+    if chi2_interp is not None:
+        try:
+            chi2_local = chi2_interp([T_local, muB_local])[0]
+        except Exception:
+            chi2_local = None
     if "vHLLE" == hydro_model:
-        return [EN[0],EN[1],T_local, muB_local, P_local, s_local, int(hyper_index)] # output for vHLLE: e, nB, T, muB, P, S, index
+        # output for vHLLE: e, nB, T, muB, P, S, cs2, chi2, index
+        return [
+            EN[0],
+            EN[1],
+            T_local,
+            muB_local,
+            P_local,
+            s_local,
+            cs2_local if cs2_local is not None else np.nan,
+            chi2_local if chi2_local is not None else np.nan,
+            int(hyper_index),
+        ]
     elif "MUSIC" == hydro_model:
-        return [T_local, muB_local, P_local, s_local, int(hyper_index)] # output for MUSIC: T, muB, P, S, index
+        return [
+            T_local,
+            muB_local,
+            P_local,
+            s_local,
+            int(hyper_index),
+        ]  # output for MUSIC: T, muB, P, S, index
     else:
         raise ValueError("Unknown hydro model: {}".format(hydro_model))
+
 
 if __name__ == "__main__":
     try:
@@ -205,7 +257,7 @@ if __name__ == "__main__":
     MAXITER = Param["MAXITER"]
     N_CORES = Param["Number_of_cores"]
     RunMode = Param["RunMode"]
-    hydro_model = Param["hydro_model"]  
+    hydro_model = Param["hydro_model"]
 
     if Param["AutoSetBoundaries"]:
         f = open("boundaries_temp.dat", "rb")
@@ -234,8 +286,10 @@ if __name__ == "__main__":
 
     # EN in GeV**powers
     EN_powers = [4.0, 3.0]
-    
-    NT, NB = (TMU_TABLES[Q]["n"] for Q in Thermodynamic_quantities)  # reshape Temperature
+
+    NT, NB = (
+        TMU_TABLES[Q]["n"] for Q in Thermodynamic_quantities
+    )  # reshape Temperature
     reshaped_T = TMU_TABLES["T"]["Table"].reshape(NT, NB)
     EN_TABLES = {
         Quantity_name: eos_table[:, i].reshape(NT, NB) * reshaped_T**j
@@ -248,7 +302,23 @@ if __name__ == "__main__":
         for i, j, Quantity_name in zip(range(4, 6), PS_powers, Press_Entro)
     }
 
+    # Grid v (T, muB) prostoru pro všechny interpolátory
     GRID = tuple(TMU_TABLES[Q]["Arr"] for Q in Thermodynamic_quantities)
+
+    # Optional extra tables: cs2 (dimensionless) and chi2(GeV^2)
+    INTERP_CS2 = None
+    INTERP_CHI2 = None
+    if eos_table.shape[1] >= 8:
+        CS2_TABLE = eos_table[:, 6].reshape(NT, NB)
+        CHI2_over_T2_TABLE = eos_table[:, 7].reshape(NT, NB)
+        CHI2_TABLE = CHI2_over_T2_TABLE * reshaped_T**2
+
+        INTERP_CS2 = interpolate.RegularGridInterpolator(
+            GRID, CS2_TABLE, bounds_error=False, fill_value=None
+        )
+        INTERP_CHI2 = interpolate.RegularGridInterpolator(
+            GRID, CHI2_TABLE, bounds_error=False, fill_value=None
+        )
     INTERP = {
         Quantity_name: interpolate.RegularGridInterpolator(
             GRID, EN_TABLES[Quantity_name], bounds_error=False, fill_value=None
@@ -269,6 +339,11 @@ if __name__ == "__main__":
         "MAXS": MAXS,
         "INTERP_PS": INTERP_PS,
     }
+
+    if INTERP_CS2 is not None:
+        META_PARAMS["INTERP_CS2"] = INTERP_CS2
+    if INTERP_CHI2 is not None:
+        META_PARAMS["INTERP_CHI2"] = INTERP_CHI2
 
     TILDE_TABLES = {
         Quantity: fill_TILDE(DATA)

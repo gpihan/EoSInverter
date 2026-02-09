@@ -1,10 +1,12 @@
-import os
-import sys
 import importlib
+import os
 import random
 import string
+import sys
+
 import numpy as np
 import pandas as pd
+
 
 def read_parameters(path):
     try:
@@ -108,6 +110,7 @@ def GetTilde(vec, dim):
 def readTable(EoS_path):
     df = pd.read_csv(EoS_path, sep="\s+", comment="#", header=None)
     return df.to_numpy()
+
 
 def SetBoundaries(EoS_path, dim):
     EOS = readTable(EoS_path)
