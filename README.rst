@@ -151,7 +151,6 @@ Running with an Ising-model EoS
 -----------------------
 
 To run with Ising-model based tables, place the appropriate EoS files
-(for example ``EoS_Above.dat``, ``EoS_Below.dat``, ``EoS_Cross.dat``)
 in the working directory and update the paths in ``parameters.py``.
 Run the inversion and post-processing as above.
 
