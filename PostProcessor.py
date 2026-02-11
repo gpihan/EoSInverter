@@ -5,7 +5,6 @@ import struct
 import sys
 
 import numpy as np
-
 from utils import read_parameters
 
 
@@ -48,7 +47,8 @@ Thermo = dim_map.get(dimension, ["T", "MUB"])
 quantity_keys = {"T": "Ttilde", "MUB": "muBtilde", "MUQ": "muQtilde", "MUS": "muStilde"}
 
 if Param.get("AutoSetBoundaries", False):
-    with open("boundaries_temp.dat", "rb") as f:
+    OutputFolder = Param["OutputFolder"]
+    with open(OutputFolder + "_boundaries_temp.dat", "rb") as f:
         BOUNDS = pickle.load(f)
 else:
     BOUNDS = Param
