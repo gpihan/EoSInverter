@@ -7,7 +7,6 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 
 import numpy as np
 from scipy import interpolate
-
 from utils import read_parameters, readTable
 
 
@@ -258,9 +257,10 @@ if __name__ == "__main__":
     N_CORES = Param["Number_of_cores"]
     RunMode = Param["RunMode"]
     hydro_model = Param["hydro_model"]
+    OutputFolder = Param["OutputFolder"]
 
     if Param["AutoSetBoundaries"]:
-        f = open("boundaries_temp.dat", "rb")
+        f = open(OutputFolder + "_boundaries_temp.dat", "rb")
         Boundaries = pickle.load(f)
         TILDE_BOUNDARIES = [Boundaries["Ttilde"], Boundaries["muBtilde"]]
     else:
@@ -296,9 +296,9 @@ if __name__ == "__main__":
         for i, j, Quantity_name in zip(range(2, 4), EN_powers, Dynamic_quantities)
     }
 
-    PS_powers = [1.0, 1.0]
+    PS_powers = [4.0, 3.0]
     PS_TABLES = {
-        Quantity_name: eos_table[:, i].reshape(NT, NB) * reshaped_T**j / hbarC**3
+        Quantity_name: eos_table[:, i].reshape(NT, NB) * reshaped_T**j
         for i, j, Quantity_name in zip(range(4, 6), PS_powers, Press_Entro)
     }
 
