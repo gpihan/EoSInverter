@@ -1,69 +1,36 @@
-# Copyright Tomáš Poledníček, Gregoire Pihan @2026
 import os
 import sys
-from typing import Tuple
 
 import numpy as np
-from scipy.interpolate import LinearNDInterpolator, interp1d
-
+from scipy.interpolate import LinearNDInterpolator, NearestNDInterpolator, interp1d
 from utils import read_parameters, readTable
 
 
-def ToEN(Tt: float, mbt: float) -> Tuple[float, float]:
+def ToEN(Tt, mbt):
     e = 19 * np.pi**2 / 12 * Tt**4
-    nb = 1 / 5 * (mbt * Tt**2)
+    nb = 1 / 3 * (mbt * Tt**2)
     return e, nb
 
 
-def Get2DTilde(e: float, nb: float) -> Tuple[float, float]:
+def Get2DTilde(e, nb):
     Ttilde = (12 / (19 * np.pi**2) * e) ** 0.25
-    muBtilde = 5 * (nb / Ttilde**2)
+    muBtilde = 3 * (nb / Ttilde**2)
     return Ttilde, muBtilde
 
 
-def GetGoodTmuB(
-    T_interp,
-    muB_interp,
-    P_interp,
-    S_interp,
-    cs2_interp,
-    chi2_interp,
-    TrLine,
-    e: float,
-    nB: float,
-):
+def create_interpolator(points, values):
+    lin = LinearNDInterpolator(points, values)
+    near = NearestNDInterpolator(points, values)
 
-    T = float(T_interp(e, nB))
-    muB = float(muB_interp(e, nB))
-    P = float(P_interp(e, nB)) if P_interp is not None else None
-    S = float(S_interp(e, nB)) if S_interp is not None else None
-    cs2 = float(cs2_interp(e, nB)) if cs2_interp is not None else None
-    chi2 = float(chi2_interp(e, nB)) if chi2_interp is not None else None
+    def interp(x, y):
+        val = lin(x, y)
 
-    region = determine_region(T, muB, TrLine)
-    return T, muB, P, S, cs2, chi2, region
+        if val is None or not np.isfinite(val):
+            val = near(x, y)
 
+        return val
 
-def determine_region(T, muB, TrLine):
-
-    if not np.isfinite(T) or not np.isfinite(muB):
-        return None
-
-    if muB <= 0.4:
-        return -1
-
-    try:
-        Tc = float(TrLine(muB))
-    except Exception:
-        return None
-
-    if not np.isfinite(Tc):
-        return None
-
-    if T < Tc:
-        return 0
-    else:
-        return 1
+    return interp
 
 
 def project_param_and_distance(px, py, x1, y1, x2, y2):
@@ -81,12 +48,36 @@ def project_param_and_distance(px, py, x1, y1, x2, y2):
     return t, d, L
 
 
-def find_closest_transition(e, nB, table, seg_norm_dist_max=10):
+def find_closest_transition(e, nB, table, seg_norm_dist_max=10, blend_width=0.05):
+    """Find closest transition and interpolate thermodynamic quantities.
+
+    Parameters
+    ----------
+    e : float
+        Energy density
+    nB : float
+        Baryon density
+    table : array-like
+        Transition line data (T, muB, eH, nBH, eQ, nBQ, [pH, sH, pQ, sQ])
+    seg_norm_dist_max : float
+        Maximum normalized distance to transition line
+    blend_width : float
+        Width of blending region for smooth transition (fraction of seg_norm_dist_max)
+
+    Returns
+    -------
+    tuple : (T, muB, P, S, chi, chi_e, chi_nB, blend_factor)
+        blend_factor: 1.0 = full RegionS, 0.0 = use interpolators
+    """
+    # First, try quadrilateral containment to directly assign muB
+
+    # Fallback: previous closest-segment logic with smooth blending
     rows = []
     for i, row in enumerate(table):
         try:
-            # datS format: T muB eH nBH eQ nBQ pH sH pQ sQ
+            # datS can contain: T muB eH nBH eQ nBQ pH sH pQ sQ
             Tc, muBc, eH, nBH, eQ, nBQ = row[:6]
+            # Optional pressure/entropy at hadron/QGP endpoints
             pH = sH = pQ = sQ = None
             if len(row) >= 10:
                 pH, sH, pQ, sQ = row[6:10]
@@ -110,7 +101,7 @@ def find_closest_transition(e, nB, table, seg_norm_dist_max=10):
         )
 
     if len(rows) == 0:
-        return False, False, False, False, False, False, None
+        return False, False, False, False, False, None, None, 0.0
 
     dists = []
     for i, Tc_f, muBc_f, eH_f, nBH_f, eQ_f, nBQ_f, pH_f, sH_f, pQ_f, sQ_f in rows:
@@ -153,26 +144,47 @@ def find_closest_transition(e, nB, table, seg_norm_dist_max=10):
         sQ_f,
     ) = dists[0]
 
+    # Calculate blend factor for smooth transition
+    # blend_factor = 1.0 at norm_d=0, smoothly goes to 0 at norm_d=seg_norm_dist_max
+    if seg_norm_dist_max is not None and seg_norm_dist_max > 0:
+        # Smooth blending using cosine interpolation
+        if norm_d_min <= seg_norm_dist_max * (1 - blend_width):
+            blend_factor = 1.0
+        elif norm_d_min >= seg_norm_dist_max:
+            blend_factor = 0.0
+        else:
+            # Smooth transition in the blend region
+            x = (norm_d_min - seg_norm_dist_max * (1 - blend_width)) / (
+                seg_norm_dist_max * blend_width
+            )
+            blend_factor = 0.5 * (1.0 + np.cos(np.pi * x))
+    else:
+        blend_factor = 1.0 if norm_d_min < float("inf") else 0.0
+
+    # Apply distance thresholds (absolute and normalized)
     if (seg_norm_dist_max is not None) and (norm_d_min > seg_norm_dist_max):
-        return False, False, False, False, False, False, None
+        return False, False, False, False, False, None, None, 0.0
 
-    chi = float(np.clip(t_min, 0.0, 1))
+    chi = float(np.clip(t_min, 0.0, 1.0))  # Use actual projection parameter
+    chi_e = None
+    chi_nB = None
 
+    # Interpolate T and muB along the segment
+    T = Tc_f
+    muB = muBc_f
+
+    # Interpolate pressure and entropy along the segment if available
     P = S = None
     if chi is not None and (pH_f is not None) and (pQ_f is not None):
         P = (1 - chi) * pH_f + chi * pQ_f
     if chi is not None and (sH_f is not None) and (sQ_f is not None):
         S = (1 - chi) * sH_f + chi * sQ_f
 
-    return Tc_f, muBc_f, P, S, None, None, chi
-
-
-def create_interpolator(points, values):
-    return LinearNDInterpolator(points, values, fill_value=np.nan)
+    return T, muB, P, S, chi, chi_e, chi_nB, blend_factor
 
 
 def run_merger(
-    EoS_table,
+    EoS,
     TrLine,
     datS,
     out_path,
@@ -180,192 +192,178 @@ def run_merger(
     Nn,
     show_progress,
     seg_norm_dist_max=0.15,
+    blend_width=0.05,
 ):
-    """
-    Sloučí jednotnou EoS tabulku s daty Region S.
+    """Merge EoS regions with smooth blending.
 
-    EoS_table formát:
-      e(GeV/fm3) nB(1/fm3) T(GeV) muB(GeV) P(GeV/fm3) s(1/fm3) cs2 chi2(GeV^2) hyper_index
+    Parameters
+    ----------
+    EoS : str
+        Path to EoS table file
+    TrLine : str
+        Path to transition line file
+    datS : str
+        Path to RegionS data file
+    out_path : str
+        Output file path
+    Ne : int
+        Number of energy density points
+    Nn : int
+        Number of baryon density points
+    show_progress : bool
+        Whether to show progress
+    seg_norm_dist_max : float
+        Maximum normalized distance to RegionS
+    blend_width : float
+        Width of smooth blending region (fraction of seg_norm_dist_max)
     """
-    # Načtení vstupních tabulek
-    EoS_data = readTable(EoS_table)
+    EoS = readTable(EoS)
     datTRLine = readTable(TrLine)
-    datS = readTable(datS)  # T muB eH nBH eQ nBQ pH sH pQ sQ
+    datS = readTable(
+        datS
+    )  # T [GeV] muB [GeV] eH [GeV/fm3] nBH [1/fm3] eQ [GeV/fm3] nBQ [1/fm3] pH [GeV/fm3] sH [1/fm3] pQ [GeV/fm3] sQ [1/fm3]
 
-    # Sloupce z jednotné EoS tabulky
-    e_eos = EoS_data[:, 0]
-    nB_eos = EoS_data[:, 1]
-    T_eos = EoS_data[:, 2]
-    muB_eos = EoS_data[:, 3]
-    P_eos = EoS_data[:, 4]
-    s_eos = EoS_data[:, 5]
-    cs2_eos = EoS_data[:, 6]
-    chi2_eos = EoS_data[:, 7]
-
-    muB_axis = datTRLine[:, 0] / 1000  # muB [GeV]
-    T_axis = datTRLine[:, 1] / 1000  # T [GeV]
+    # define interpolators
+    # Transition line (do not extrapolate: return NaN outside domain)
     TrLine = interp1d(
-        muB_axis,
-        T_axis,
+        datTRLine[:, 0] / 1000,
+        datTRLine[:, 1] / 1000,
         kind="linear",
         bounds_error=False,
-        fill_value=(T_axis[0], T_axis[-1]),
-    )
+        fill_value=np.nan,
+    )  # convert MeV -> GeV, NaN outside
 
-    points_en = np.column_stack((e_eos, nB_eos))
+    # EoS columns (assumed):
+    # 0: e, 1: nB, 2: T, 3: muB, 4: P, 5: s, 6: cs2, 7: chi2
+    TEoS = create_interpolator(EoS[:, :2], EoS[:, 2])
+    muBEoS = create_interpolator(EoS[:, :2], EoS[:, 3])
+    PEoS = create_interpolator(EoS[:, :2], EoS[:, 4]) if EoS.shape[1] >= 6 else None
+    SEoS = create_interpolator(EoS[:, :2], EoS[:, 5]) if EoS.shape[1] >= 6 else None
+    cs2EoS = create_interpolator(EoS[:, :2], EoS[:, 6]) if EoS.shape[1] >= 7 else None
+    chi2EoS = create_interpolator(EoS[:, :2], EoS[:, 7]) if EoS.shape[1] >= 8 else None
 
-    T_interp = create_interpolator(points_en, T_eos)
-    muB_interp = create_interpolator(points_en, muB_eos)
-    P_interp = create_interpolator(points_en, P_eos) if P_eos is not None else None
-    S_interp = create_interpolator(points_en, s_eos) if s_eos is not None else None
-    cs2_interp = (
-        create_interpolator(points_en, cs2_eos) if cs2_eos is not None else None
-    )
-    chi2_interp = (
-        create_interpolator(points_en, chi2_eos) if chi2_eos is not None else None
-    )
+    T_min = (EoS[:, 2]).min()
+    T_max = (EoS[:, 2]).max()
 
-    # Rozsahy v tilde rovině
-    TTil_eos, muBBtil_eos = Get2DTilde(e_eos, nB_eos)
-    TTil_min = float(TTil_eos.min())
-    TTil_max = float(TTil_eos.max())
-    muBBtil_min = float(muBBtil_eos.min())
-    muBBtil_max = float(muBBtil_eos.max())
+    mub_min = (EoS[:, 3]).min()
+    mub_max = (EoS[:, 3]).max()
+    print(T_min, T_max, mub_min, mub_max)
+
+    TTilEoS, muBBtilEoS = Get2DTilde(EoS[:, 0], EoS[:, 1])
+
+    TTil_min = float(TTilEoS.min())
+    TTil_max = float(TTilEoS.max())
+    muBBtil_min = float(muBBtilEoS.min())
+    muBBtil_max = float(muBBtilEoS.max())
 
     TTILDEArr = np.linspace(TTil_min, TTil_max, Ne)
     mubTILDEArr = np.linspace(muBBtil_min, muBBtil_max, Nn)
 
     print(f"Writing merged EoS to {out_path} ...")
-    print(f"Grid size: {Ne} x {Nn} = {Ne * Nn} points")
+    print(
+        f"Blend width: {blend_width * seg_norm_dist_max:.3f} (relative: {blend_width})"
+    )
 
     with open(out_path, "w") as f:
+        # nový header
         f.write(
-            "# Ttilde(GeV) muBtilde(GeV) e(GeV^4) nB(GeV^3) T(GeV) muB(GeV) "
-            "P(GeV^4) s(GeV^3) cs2 chi2(GeV^2) chi\n"
+            "# Ttilde(GeV) muBtilde(GeV) e(GeV^4) nB(GeV^3) "
+            "T(GeV) muB(GeV) P(GeV^4) s(GeV^3) cs2 chi2(GeV^2) chi\n"
         )
 
         for i_T, Ttilde in enumerate(TTILDEArr):
             if show_progress and (i_T % max(1, Ne // 10) == 0):
                 print(f"Progress: {i_T}/{Ne} rows ({100.0 * i_T / max(1, Ne):.1f}%)")
-
             for i_mub, muBtilde in enumerate(mubTILDEArr):
                 e, nB = ToEN(Ttilde, muBtilde)
-
-                T = muB = P = S = np.nan
-                cs2_val = chi2_val = np.nan
-                chi_val = np.nan
-
                 res = find_closest_transition(
                     e,
                     nB,
                     datS,
                     seg_norm_dist_max=seg_norm_dist_max,
+                    blend_width=blend_width,
                 )
 
                 if res[0] is not False:
-                    T_tr, muB_tr, P, S, cs2_val, chi2_val, chi = res
-
-                    if cs2_interp is not None:
-                        try:
-                            cs2_val = float(cs2_interp(e, nB))
-                        except Exception:
-                            cs2_val = np.nan
-                    if chi2_interp is not None:
-                        try:
-                            chi2_val = float(chi2_interp(e, nB))
-                        except Exception:
-                            chi2_val = np.nan
-
-                    try:
-                        T_tmp = float(T_interp(e, nB))
-                        muB_tmp = float(muB_interp(e, nB))
-                    except Exception:
-                        T_tmp, muB_tmp = np.nan, np.nan
-
-                    if np.isfinite(T_tmp) and np.isfinite(muB_tmp):
-                        T, muB = T_tmp, muB_tmp
-                    else:
-                        T, muB = float(T_tr), float(muB_tr)
-
-                    if chi is not None:
-                        chi_val = float(chi)
-                else:
                     (
-                        T_raw,
-                        muB_raw,
-                        P_raw,
-                        S_raw,
-                        cs2_raw,
-                        chi2_raw,
-                        region,
-                    ) = GetGoodTmuB(
-                        T_interp,
-                        muB_interp,
-                        P_interp,
-                        S_interp,
-                        cs2_interp,
-                        chi2_interp,
-                        TrLine,
-                        e,
-                        nB,
-                    )
+                        T_regionS,
+                        muB_regionS,
+                        P_regionS,
+                        S_regionS,
+                        chi,
+                        chi_e,
+                        chi_n,
+                        blend_factor,
+                    ) = res
 
-                    if T_raw is not False and muB_raw is not False:
-                        T = float(T_raw)
-                        muB = float(muB_raw)
-                        P = (
-                            float(P_raw)
-                            if P_raw is not False and P_raw is not None
-                            else np.nan
-                        )
-                        S = (
-                            float(S_raw)
-                            if S_raw is not False and S_raw is not None
-                            else np.nan
-                        )
-                        cs2_val = (
-                            float(cs2_raw)
-                            if cs2_raw is not False and cs2_raw is not None
-                            else np.nan
-                        )
-                        chi2_val = (
-                            float(chi2_raw)
-                            if chi2_raw is not False and chi2_raw is not None
-                            else np.nan
-                        )
+                    # Get values from interpolators
+                    T_interp = TEoS(e, nB)
+                    muB_interp = muBEoS(e, nB)
+                    P_interp = PEoS(e, nB) if PEoS is not None else None
+                    S_interp = SEoS(e, nB) if SEoS is not None else None
+                    cs2_interp = cs2EoS(e, nB) if cs2EoS is not None else None
+                    chi2_interp = chi2EoS(e, nB) if chi2EoS is not None else None
 
-                        chi_val = float(region) if region is not None else np.nan
-                P_val = P if P is not None else np.nan
-                S_val = S if S is not None else np.nan
-                cs2_val = cs2_val if cs2_val is not None else np.nan
-                chi2_val = chi2_val if chi2_val is not None else np.nan
+                    # Blend between RegionS and interpolators
+                    T = blend_factor * T_regionS + (1 - blend_factor) * T_interp
+                    muB = blend_factor * muB_regionS + (1 - blend_factor) * muB_interp
+
+                    # Blend P and S if available
+                    P = None
+                    S = None
+                    if P_regionS is not None and P_interp is not None:
+                        P = blend_factor * P_regionS + (1 - blend_factor) * P_interp
+                    elif P_interp is not None:
+                        P = P_interp
+                    elif P_regionS is not None:
+                        P = P_regionS
+
+                    if S_regionS is not None and S_interp is not None:
+                        S = blend_factor * S_regionS + (1 - blend_factor) * S_interp
+                    elif S_interp is not None:
+                        S = S_interp
+                    elif S_regionS is not None:
+                        S = S_regionS
+
+                    # cs2, chi2 bereme z EoS interpolátorů
+                    cs2 = cs2_interp
+                    chi2 = chi2_interp
+
+                else:
+                    # fallback: use interpolators only
+                    T = TEoS(e, nB)
+                    muB = muBEoS(e, nB)
+                    P = PEoS(e, nB) if PEoS is not None else None
+                    S = SEoS(e, nB) if SEoS is not None else None
+                    cs2 = cs2EoS(e, nB) if cs2EoS is not None else None
+                    chi2 = chi2EoS(e, nB) if chi2EoS is not None else None
+
+                    if muB < 0.400:
+                        chi = -1.0
+                    elif muB >= 0.400 and T < TrLine(muB):
+                        chi = 0.0
+                    elif muB >= 0.400 and T > TrLine(muB):
+                        chi = 1.0
 
                 f.write(
-                    f"{Ttilde:.6e} {muBtilde:.6e} {e:.6e} {nB:.6e} {T:.6e} {muB:.6e} "
-                    f"{P_val:.6e} {S_val:.6e} {cs2_val:.6e} {chi2_val:.6e} {chi_val:.6e}\n"
+                    f" {Ttilde:.8e} {muBtilde:.8e} {e:.8e} {nB:.8e} "
+                    f"{T:.8e} {muB:.8e} {P:.8e} {S:.8e} {cs2:.8e} {chi2:.8e} {chi:.8e}\n"
                 )
 
     print("... done.")
+    print(f"Output written to: {out_path}")
 
 
 def main(argv):
-    if not argv:
-        print("Usage: python merger_single_table.py <parameter_file>")
-        sys.exit(1)
-
-    param_path = argv[0]
-
-    if not os.path.exists(param_path):
-        print(f"Parameter file not found: {param_path}")
-        sys.exit(1)
+    try:
+        param_path = sys.argv[1]
+    except FileNotFoundError:
+        print("Parameter file is not found or specified.")
+        sys.exit()
 
     Param = read_parameters(param_path)
 
-    EoS_table = os.path.join(Param["OutputFolder"], "EoS_all.dat")
-
-    if not os.path.exists(EoS_table):
-        print(f"EoS table not found: {EoS_table}")
-        sys.exit(1)
+    EoS = Param["OutputFolder"] + "/EoS_all.dat"
 
     TrLine = os.path.join(Param["TransitionLine"])
     datS = os.path.join(Param["RegionS"])
@@ -373,12 +371,11 @@ def main(argv):
     Ne = Param["NTildeT"]
     Nn = Param["NTildemuB"]
 
-    print("Running EoS merger with single unified table...")
-    print(f"Input EoS: {EoS_table}")
-    print(f"Grid size: {Ne} x {Nn} = {Ne * Nn}")
+    print("Running EoS merger...")
+    print("Grid size: ", Ne * Nn)
 
     run_merger(
-        EoS_table,
+        EoS,
         TrLine,
         datS,
         out_path,
@@ -386,6 +383,7 @@ def main(argv):
         Nn,
         show_progress=True,
         seg_norm_dist_max=0.15,
+        blend_width=0.05,  # 5% blending region for smooth transition
     )
 
 
@@ -394,9 +392,6 @@ if __name__ == "__main__":
         status = main(sys.argv[1:])
     except Exception as e:
         print(f"Error: {e}")
-        import traceback
-
-        traceback.print_exc()
-        sys.exit(1)
+        print("Invalid arguments.")
 
     sys.exit(0)
