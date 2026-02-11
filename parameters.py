@@ -1,13 +1,13 @@
 general_parameters = {
-    "RunMode": 0,  # Run Mode: 0 -> Run locally
+    "RunMode": 2,  # Run Mode: 0 -> Run locally
     # Run Mode: 1 -> Run on slurm cluster
     "Dimension": 2,  # Dimensions = 1 gives T(e)
     # Dimensions = 2 gives T(e, nb), mub(T, nb)
     # Dimensions = 3 gives T(e, nb, nq), mub(e, nb, nq), muq(e, nb, nq)
     # Dimensions = 4 gives T(e, nb, nq, ns), mub(e, nb, nq, ns), muq(e, nb, nq, ns), mus(e, nb, nq, ns)
     "AutoSetBoundaries": True,
-    "NT": 200,
-    "NB": 200,
+    "NT": 500,
+    "NB": 500,
     "NQ": 2,
     "NS": 2,
     "Ttilde": [0.009777504201390019, 0.31403115649771435, 10],
@@ -23,6 +23,6 @@ general_parameters = {
     "TransitionLine": "TransitionlineFilePar.dat",  # Path to transition line data (muB, T format)
     "RegionS": "RegionS.dat",  # path to transition region S data
     "OutputMergedEoS": "invIsing-2DTExS.dat",  # output merged EoS table
-    "NTildeT": 200,  # number of points in energy density direction for merged EoS
-    "NTildemuB": 200,  # number of points in baryon density direction for merged ES
+    "NTildeT": 500,  # number of points in energy density direction for merged EoS
+    "NTildemuB": 500,  # number of points in baryon density direction for merged ES
 }
