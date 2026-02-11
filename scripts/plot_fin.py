@@ -27,13 +27,8 @@ Param = read_parameters(param_path)
 data = os.path.join(os.path.dirname(param_path), Param["OutputMergedEoS"])
 
 
-# Columns in invMergedEoS_test.dat:
-# Ttilde(GeV) muBtilde(GeV) e(GeV^4) nB(GeV^3) T(GeV) muB(GeV)
-# P(GeV^4) s(GeV^3) cs2 chi2(GeV^2) chi
-
 EoS = np.loadtxt(data, skiprows=1)
 
-# Ensure that the number of rows matches the expected NTildeT * NTildemuB
 NTildeT = Param["NTildeT"]
 NTildemuB = Param["NTildemuB"]
 
@@ -46,16 +41,14 @@ if nrows != expected_rows:
         f"{NTildeT}x{NTildemuB}). Adjusting data to match grid."
     )
     if nrows > expected_rows:
-        # Too many rows: truncate extras
         EoS = EoS[:expected_rows]
     else:
-        # Too few rows: pad with NaNs so that reshape works
         pad_rows = expected_rows - nrows
         pad = np.full((pad_rows, ncols), np.nan)
         EoS = np.vstack((EoS, pad))
     nrows, ncols = EoS.shape
 
-# Extract columns (flat arrays)
+
 Ttilde = EoS[:, 0]
 mubtilde = EoS[:, 1]
 e = EoS[:, 2]
@@ -112,11 +105,33 @@ plt.savefig(os.path.join(OUTDIR, "muBtilde_vs_Ttilde_colored_by_chi.png"), dpi=3
 plt.show()
 
 
-# Plots analogous to HydroIsingEos/plotEoS.py
-
-# Reshape directly using NTildeT and NTildemuB from the parameter file.
 nrows, ncols = EoS.shape
 dat = EoS.reshape(NTildeT, NTildemuB, ncols)
+
+
+e_grid_2d = dat[:, :, 2]
+nb_grid_2d = dat[:, :, 3]
+P_grid_2d = dat[:, :, 6]
+
+hbarc = 0.1973269804  # GeV*fm
+conv_fm3 = 1.0 / (hbarc**3)
+e_grid_fm = e_grid_2d * conv_fm3
+nb_grid_fm = nb_grid_2d * conv_fm3
+P_grid_fm = P_grid_2d * conv_fm3
+
+plt.figure(figsize=(10, 8))
+pcm = plt.pcolormesh(nb_grid_fm, e_grid_fm, P_grid_fm, shading="auto", cmap="viridis")
+cbar = plt.colorbar(pcm)
+cbar.set_label(r"$P$ [GeV/fm$^3$]", fontsize=21)
+plt.xlabel(r"$n_B$ [1/fm$^3$]", fontsize=21)
+plt.ylabel(r"$e$ [GeV/fm$^3$]", fontsize=21)
+plt.tick_params(axis="both", which="major", labelsize=18)
+cbar.ax.tick_params(axis="both", which="major", labelsize=22)
+plt.grid(True)
+plt.tight_layout()
+set_panel_border(plt.gca())
+plt.savefig(os.path.join(OUTDIR, "P_heatmap_e_nb.png"), dpi=300)
+plt.show()
 
 
 fig, ax = plt.subplots(1, 1, figsize=(10, 8))
