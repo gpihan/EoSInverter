@@ -94,7 +94,13 @@ elif Param["RunMode"] == 2:
 
     # Create a master script that runs all jobs sequentially
     master_script = os.path.join(scripts_dir, f"run_all_{dimension}D_{folder_name}.sh")
-    master_lines = ["#!/usr/bin/env bash\n", "set -euo pipefail\n\n"]
+    master_lines = [
+        "#!/usr/bin/env bash\n",
+        "set -euo pipefail\n\n",
+        'cd "$(dirname "$0")"\n\n',
+    ]
+
+    submit_failures = []
 
     for i, T in enumerate(TArr):
         job_script = os.path.join(
@@ -125,7 +131,9 @@ elif Param["RunMode"] == 2:
             os.chmod(job_script, 0o755)
         except Exception:
             pass
-        os.system("qsub " + job_script)
+        rc = os.system("qsub " + job_script)
+        if rc != 0:
+            submit_failures.append((i, job_script, rc))
 
         # Add to master script
         master_lines.append(f"./{os.path.basename(job_script)}\n")
@@ -136,3 +144,13 @@ elif Param["RunMode"] == 2:
         os.chmod(master_script, 0o755)
     except Exception:
         pass
+
+    if submit_failures:
+        failure_log = os.path.join(scripts_dir, "submit_failures.txt")
+        with open(failure_log, "w") as lf:
+            for i, job_script, rc in submit_failures:
+                lf.write(f"Tidx{i}\t{job_script}\treturn_code={rc}\n")
+        print(
+            f"Pozor: {len(submit_failures)} job(ů) se neodeslalo. "
+            f"Detaily v {failure_log}."
+        )

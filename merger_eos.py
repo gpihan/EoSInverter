@@ -8,13 +8,13 @@ from utils import read_parameters, readTable
 
 def ToEN(Tt, mbt):
     e = 19 * np.pi**2 / 12 * Tt**4
-    nb = 1 / 3 * (mbt * Tt**2)
+    nb = 1 / 5 * (mbt * Tt**2)
     return e, nb
 
 
 def Get2DTilde(e, nb):
     Ttilde = (12 / (19 * np.pi**2) * e) ** 0.25
-    muBtilde = 3 * (nb / Ttilde**2)
+    muBtilde = 5 * (nb / Ttilde**2)
     return Ttilde, muBtilde
 
 
