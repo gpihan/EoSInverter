@@ -10,13 +10,13 @@ from utils import read_parameters
 
 def ToTilde(e, nB):
     Tt = (12 / 19 / np.pi**2 * e) ** (1 / 4)
-    mbt = 5 * nB / Tt**2
+    mbt = 3 * nB / Tt**2
     return Tt, mbt
 
 
 def ToEN(Tt, mbt):
     e = 19 / 12 * np.pi**2 * Tt**4
-    nb = 1 / 5 * mbt * Tt**2
+    nb = 1 / 3 * mbt * Tt**2
     return e, nb
 
 
@@ -120,7 +120,9 @@ def FindVals(EoS, TrLine, RegionS):
     OUT[:, 7] = N
 
     with open(RegionS, "w") as f:
-        f.write("# T muB muBtildeQGP eHG nBHG eQGP nBQGP \n")
+        f.write(
+            "# TtildeHG muBTildeHG TtildeQGP muBtildeQGP eHG nBHG eQGP nBQGP T muB\n"
+        )
         for i in range(len(OUT[:, 0])):
             T, muB, eH, nBH, eQ, nBQ, TtH, mbtH, TtQ, mbtQ = (
                 OUT[i, 8],
@@ -134,7 +136,9 @@ def FindVals(EoS, TrLine, RegionS):
                 OUT[i, 2],
                 OUT[i, 3],
             )
-            f.write(f"{T:5} {muB:5} {eH:5} {nBH:5} {eQ:5} {nBQ:5} \n")
+            f.write(
+                f"{TtH:5} {mbtH:5} {TtQ:5} {mbtQ:5} {eH:5} {nBH:5} {eQ:5} {nBQ:5} {T:5} {muB:5}\n"
+            )
 
     print(f"Transition region data written to {RegionS}")
 
