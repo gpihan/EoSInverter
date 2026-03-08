@@ -4,19 +4,18 @@ import sys
 import numpy as np
 from scipy.interpolate import UnivariateSpline, interp1d
 from scipy.ndimage import gaussian_filter1d
-
 from utils import read_parameters
 
 
 def ToTilde(e, nB):
     Tt = (12 / 19 / np.pi**2 * e) ** (1 / 4)
-    mbt = 3 * nB / Tt**2
+    mbt = 5 * nB / Tt**2
     return Tt, mbt
 
 
 def ToEN(Tt, mbt):
     e = 19 / 12 * np.pi**2 * Tt**4
-    nb = 1 / 3 * mbt * Tt**2
+    nb = 1 / 5 * mbt * Tt**2
     return e, nb
 
 
@@ -85,7 +84,7 @@ def FindVals(EoS, TrLine, RegionS):
 
         etrunc_sm = smooth_gaussian_uniform(Ttrunc, etrunc, 0.0008)
 
-        mask4 = Ttrunc >= TFUNC([muB[0] for i in range(len(Ttrunc))]) + 0.004
+        mask4 = Ttrunc >= TFUNC([muB[0] for i in range(len(Ttrunc))]) + 0.002
         Ttrunc4 = Ttrunc[mask4]
         etrunc4 = etrunc_sm[mask4]
         nbtrunc4 = nbtrunc[mask4]
