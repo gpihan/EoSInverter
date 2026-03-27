@@ -5,10 +5,9 @@ general_parameters = {
     # Dimensions = 2 gives T(e, nb), mub(T, nb)
     # Dimensions = 3 gives T(e, nb, nq), mub(e, nb, nq), muq(e, nb, nq)
     # Dimensions = 4 gives T(e, nb, nq, ns), mub(e, nb, nq, ns), muq(e, nb, nq, ns), mus(e, nb, nq, ns)
-    "TildeSwitch": False,  # True -> grid in (Ttilde, muBtilde, ...), False -> for 2D grid in (e, nB)
     "AutoSetBoundaries": True,
-    "NT": 500,
-    "NB": 500,
+    "NT": 200,
+    "NB": 200,
     "NQ": 2,
     "NS": 2,
     "Ttilde": [0.009777504201390019, 0.31403115649771435, 10],
@@ -21,11 +20,11 @@ general_parameters = {
     "MAXITER": 100,
     "Number_of_cores": 12,
     "hydro_model": "vHLLE",  # MUSIC
-    "EoS_table": "EoS2DIsing.dat",
-    "OutputFolder": "EoS2DIsing_test",
+    "EoS_table": "EoSISING.dat",
+    "OutputFolder": "EoSISING",
     "TransitionLine": "TransitionlineFilePar.dat",  # Path to transition line data (muB, T format)
     "RegionS": "RegionS.dat",  # path to transition region S data
     "OutputMergedEoS": "invIsing-2DTExS.dat",  # output merged EoS table
-    "NTildeT": 500,  # number of points in energy density direction for merged EoS
-    "NTildemuB": 500,  # number of points in baryon density direction for merged ES
+    "NTildeT": 200,  # number of points in energy density direction for merged EoS
+    "NTildemuB": 200,  # number of points in baryon density direction for merged ES
 }

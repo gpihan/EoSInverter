@@ -119,7 +119,7 @@ os.makedirs(raw_dir, exist_ok=True)
 for file in os.listdir(target_folder):
     if file.startswith("TEMP_unordered_inversion_"):
         shutil.move(os.path.join(target_folder, file), raw_dir)
-if os.path.exists("boundaries_temp.dat"):
-    os.remove("boundaries_temp.dat")
+if os.path.exists(OutputFolder + "_boundaries_temp.dat"):
+    os.remove(OutputFolder + "_boundaries_temp.dat")
 for pat in ["JobArray*", "output*", "errors*"]:
     os.system(f"rm -rf {pat}")

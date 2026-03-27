@@ -58,7 +58,8 @@ def find_closest_transition(e, nB, table, seg_norm_dist_max=10, blend_width=0.05
     nB : float
         Baryon density
     table : array-like
-        Transition line data (T, muB, eH, nBH, eQ, nBQ, [pH, sH, pQ, sQ])
+        Transition line data:
+        (TtildeHG, muBtildeHG, TtildeQGP, muBtildeQGP, eHG, nBHG, eQGP, nBQGP, T, muB)
     seg_norm_dist_max : float
         Maximum normalized distance to transition line
     blend_width : float
@@ -75,12 +76,14 @@ def find_closest_transition(e, nB, table, seg_norm_dist_max=10, blend_width=0.05
     rows = []
     for i, row in enumerate(table):
         try:
-            # datS can contain: T muB eH nBH eQ nBQ pH sH pQ sQ
-            Tc, muBc, eH, nBH, eQ, nBQ = row[:6]
-            # Optional pressure/entropy at hadron/QGP endpoints
+            # datS format:
+            # TtildeHG muBtildeHG TtildeQGP muBtildeQGP eHG nBHG eQGP nBQGP T muB
+            TtildeHG, muBtildeHG, TtildeQGP, muBtildeQGP, eH, nBH, eQ, nBQ, Tc, muBc = (
+                row[:10]
+            )
+
+            # Pressure/entropy are not part of this datS format.
             pH = sH = pQ = sQ = None
-            if len(row) >= 10:
-                pH, sH, pQ, sQ = row[6:10]
             eH_f, nBH_f, eQ_f, nBQ_f = float(eH), float(nBH), float(eQ), float(nBQ)
         except Exception:
             continue
@@ -221,7 +224,7 @@ def run_merger(
     datTRLine = readTable(TrLine)
     datS = readTable(
         datS
-    )  # T [GeV] muB [GeV] eH [GeV/fm3] nBH [1/fm3] eQ [GeV/fm3] nBQ [1/fm3] pH [GeV/fm3] sH [1/fm3] pQ [GeV/fm3] sQ [1/fm3]
+    )  # TtildeHG muBtildeHG TtildeQGP muBtildeQGP eHG nBHG eQGP nBQGP T muB
 
     # define interpolators
     # Transition line (do not extrapolate: return NaN outside domain)
