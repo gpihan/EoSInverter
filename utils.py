@@ -120,3 +120,18 @@ def SetBoundaries(EoS_path, dim):
     dynVars = EOS[:, dim : 2 * dim] * scaling_factors
     Tildes = GetTilde(dynVars, dim)
     return np.array([[np.min(Tildes[:, i]), np.max(Tildes[:, i])] for i in range(dim)])
+
+
+def SetENBoundaries(EoS_path, dim):
+    """Return min/max boundaries in conserved-variable space.
+
+    For dim=2 this corresponds to [e, nB].
+    """
+    EOS = readTable(EoS_path)
+    T = EOS[:, 0]
+    exponents = [4] + [3] * (dim - 1)
+    scaling_factors = np.column_stack([T**p for p in exponents])
+    dynVars = EOS[:, dim : 2 * dim] * scaling_factors
+    return np.array(
+        [[np.min(dynVars[:, i]), np.max(dynVars[:, i])] for i in range(dim)]
+    )

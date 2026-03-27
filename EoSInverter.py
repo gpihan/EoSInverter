@@ -5,6 +5,7 @@ import sys
 import numpy as np
 from utils import (
     SetBoundaries,
+    SetENBoundaries,
     create_folder,
     create_job_script,
     read_parameters,
@@ -20,6 +21,7 @@ Param = read_parameters(param_path)
 folder_name = create_folder(Param["OutputFolder"])
 
 dimension = Param["Dimension"]
+tilde_switch = Param.get("TildeSwitch", True)
 
 if Param["AutoSetBoundaries"]:
     Bound = SetBoundaries(Param["EoS_table"], Param["Dimension"])
@@ -29,19 +31,48 @@ if Param["AutoSetBoundaries"]:
     Boundaries = {}
     for i, name, Npoint in zip(range(len(Bound)), Names, Npoints):
         Boundaries[name] = list(Bound[i]) + [Param[Npoint]]
+
+    # Optional EN-space boundaries used when TildeSwitch is off.
+    if not tilde_switch and dimension == 2:
+        BoundEN = SetENBoundaries(Param["EoS_table"], Param["Dimension"])
+        Boundaries["e"] = [BoundEN[0][0], BoundEN[0][1], Param["NT"]]
+        Boundaries["nB"] = [BoundEN[1][0], BoundEN[1][1], Param["NB"]]
+
     with open(OutputFolder + "_boundaries_temp.dat", "wb") as f:
         pickle.dump(Boundaries, f)
-    TTILDE_MIN, TTILDE_MAX, TTILDE_N = (
-        Boundaries["Ttilde"][0],
-        Boundaries["Ttilde"][1],
-        Boundaries["Ttilde"][2],
-    )
+    if tilde_switch:
+        TTILDE_MIN, TTILDE_MAX, TTILDE_N = (
+            Boundaries["Ttilde"][0],
+            Boundaries["Ttilde"][1],
+            Boundaries["Ttilde"][2],
+        )
+    elif dimension == 2:
+        TTILDE_MIN, TTILDE_MAX, TTILDE_N = (
+            Boundaries["e"][0],
+            Boundaries["e"][1],
+            Boundaries["e"][2],
+        )
+    else:
+        raise ValueError(
+            "TildeSwitch=False is currently supported only for Dimension=2."
+        )
 else:
-    TTILDE_MIN, TTILDE_MAX, TTILDE_N = (
-        Param["Ttilde"][0],
-        Param["Ttilde"][1],
-        Param["Ttilde"][2],
-    )
+    if tilde_switch:
+        TTILDE_MIN, TTILDE_MAX, TTILDE_N = (
+            Param["Ttilde"][0],
+            Param["Ttilde"][1],
+            Param["Ttilde"][2],
+        )
+    elif dimension == 2:
+        TTILDE_MIN, TTILDE_MAX, TTILDE_N = (
+            Param["e"][0],
+            Param["e"][1],
+            Param["e"][2],
+        )
+    else:
+        raise ValueError(
+            "TildeSwitch=False is currently supported only for Dimension=2."
+        )
 
 
 if Param["RunMode"] == 0:
@@ -110,7 +141,7 @@ elif Param["RunMode"] == 2:
             "#!/bin/bash\n",
             "#PBS -l walltime=28:00:00\n",
             "#PBS -l select=2:mem=10gb\n",
-            'cd "/storage/brno12-cerit/home/poledto1/ising-hydro/EoSInverter"\n',
+            'cd "/storage/brno12-cerit/home/poledto1/EoSInverter"\n',
             "module add python\n",
             "source venv/bin/activate\n",
             "python3 mapEOS_"
@@ -151,6 +182,6 @@ elif Param["RunMode"] == 2:
             for i, job_script, rc in submit_failures:
                 lf.write(f"Tidx{i}\t{job_script}\treturn_code={rc}\n")
         print(
-            f"Pozor: {len(submit_failures)} job(ů) se neodeslalo. "
-            f"Detaily v {failure_log}."
+            f"Warning: {len(submit_failures)} job(s) failed to submit. "
+            f"Details in {failure_log}."
         )

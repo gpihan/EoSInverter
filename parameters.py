@@ -5,6 +5,7 @@ general_parameters = {
     # Dimensions = 2 gives T(e, nb), mub(T, nb)
     # Dimensions = 3 gives T(e, nb, nq), mub(e, nb, nq), muq(e, nb, nq)
     # Dimensions = 4 gives T(e, nb, nq, ns), mub(e, nb, nq, ns), muq(e, nb, nq, ns), mus(e, nb, nq, ns)
+    "TildeSwitch": False,  # True -> grid in (Ttilde, muBtilde, ...), False -> for 2D grid in (e, nB)
     "AutoSetBoundaries": True,
     "NT": 500,
     "NB": 500,
@@ -14,12 +15,14 @@ general_parameters = {
     "muBtilde": [-2.2732322158914076, 2.2732322158914076, 10],
     "muQtilde": [-0.6292193138512704, 0.6292193138512704, 10],
     "muStilde": [-0.6880440931493973, 0.6880440931493973, 10],
-    "Accuracy": 1e-6,
+    "e": [2.0e-05, 4.0e-01, 500],
+    "nB": [-3.0e-02, 3.0e-02, 500],
+    "Accuracy": 1e-4,
     "MAXITER": 100,
     "Number_of_cores": 12,
     "hydro_model": "vHLLE",  # MUSIC
-    "EoS_table": "EoS2DISINGnew.dat",
-    "OutputFolder": "EoS2DISINGnew",
+    "EoS_table": "EoS2DIsing.dat",
+    "OutputFolder": "EoS2DIsing_test",
     "TransitionLine": "TransitionlineFilePar.dat",  # Path to transition line data (muB, T format)
     "RegionS": "RegionS.dat",  # path to transition region S data
     "OutputMergedEoS": "invIsing-2DTExS.dat",  # output merged EoS table
