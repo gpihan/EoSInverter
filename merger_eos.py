@@ -24,11 +24,9 @@ def create_interpolator(points, values):
 
     def interp(x, y):
         val = lin(x, y)
-
-        if val is None or not np.isfinite(val):
+        if val is None or np.any(~np.isfinite(np.asarray(val))):
             val = near(x, y)
-
-        return val
+        return float(np.asarray(val))
 
     return interp
 
@@ -58,8 +56,7 @@ def find_closest_transition(e, nB, table, seg_norm_dist_max=10, blend_width=0.05
     nB : float
         Baryon density
     table : array-like
-        Transition line data:
-        (TtildeHG, muBtildeHG, TtildeQGP, muBtildeQGP, eHG, nBHG, eQGP, nBQGP, T, muB)
+        Transition line data (T, muB, eH, nBH, eQ, nBQ, [pH, sH, pQ, sQ])
     seg_norm_dist_max : float
         Maximum normalized distance to transition line
     blend_width : float
@@ -76,14 +73,12 @@ def find_closest_transition(e, nB, table, seg_norm_dist_max=10, blend_width=0.05
     rows = []
     for i, row in enumerate(table):
         try:
-            # datS format:
-            # TtildeHG muBtildeHG TtildeQGP muBtildeQGP eHG nBHG eQGP nBQGP T muB
-            TtildeHG, muBtildeHG, TtildeQGP, muBtildeQGP, eH, nBH, eQ, nBQ, Tc, muBc = (
-                row[:10]
-            )
-
-            # Pressure/entropy are not part of this datS format.
+            # datS can contain: T muB eH nBH eQ nBQ pH sH pQ sQ
+            Tc, muBc, eH, nBH, eQ, nBQ = row[:6]
+            # Optional pressure/entropy at hadron/QGP endpoints
             pH = sH = pQ = sQ = None
+            if len(row) >= 10:
+                pH, sH, pQ, sQ = row[6:10]
             eH_f, nBH_f, eQ_f, nBQ_f = float(eH), float(nBH), float(eQ), float(nBQ)
         except Exception:
             continue
@@ -224,7 +219,7 @@ def run_merger(
     datTRLine = readTable(TrLine)
     datS = readTable(
         datS
-    )  # TtildeHG muBtildeHG TtildeQGP muBtildeQGP eHG nBHG eQGP nBQGP T muB
+    )  # T[GeV] muB[GeV] eHG[GeV^4] nBHG[GeV^3] eQGP[GeV^4] nBQGP[GeV^3]
 
     # define interpolators
     # Transition line (do not extrapolate: return NaN outside domain)

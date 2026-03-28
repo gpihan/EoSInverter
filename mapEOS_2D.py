@@ -250,14 +250,6 @@ if __name__ == "__main__":
         )
         exit(1)
 
-    import os as _os
-
-    OUTPUT_FOLDER = _os.path.abspath(OUTPUT_FOLDER)
-    _os.makedirs(OUTPUT_FOLDER, exist_ok=True)
-    output_file = _os.path.join(
-        OUTPUT_FOLDER, "TEMP_unordered_inversion_" + str(int(T_ID)) + ".dat"
-    )
-
     Param = read_parameters(ParamPath)
     EoS_table_file = Param["EoS_table"]
     ACCURACY = Param["Accuracy"]
@@ -379,6 +371,9 @@ if __name__ == "__main__":
         for future in as_completed(future_to_x):
             x = future_to_x[future]
             results = future.result()
-            with open(output_file, "a") as file:
+            with open(
+                OUTPUT_FOLDER + "/TEMP_unordered_inversion_" + str(int(T_ID)) + ".dat",
+                "a",
+            ) as file:
                 file.write(" ".join(map(str, results)) + "\n")
         file.close()

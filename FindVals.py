@@ -4,6 +4,7 @@ import sys
 import numpy as np
 from scipy.interpolate import UnivariateSpline, interp1d
 from scipy.ndimage import gaussian_filter1d
+
 from utils import read_parameters
 
 
@@ -119,9 +120,7 @@ def FindVals(EoS, TrLine, RegionS):
     OUT[:, 7] = N
 
     with open(RegionS, "w") as f:
-        f.write(
-            "# TtildeHG muBTildeHG TtildeQGP muBtildeQGP eHG nBHG eQGP nBQGP T muB\n"
-        )
+        f.write("# T[GeV] muB[GeV] eHG[GeV^4] nBHG[GeV^3] eQGP[GeV^4] nBQGP[GeV^3]\n")
         for i in range(len(OUT[:, 0])):
             T, muB, eH, nBH, eQ, nBQ, TtH, mbtH, TtQ, mbtQ = (
                 OUT[i, 8],
@@ -135,9 +134,7 @@ def FindVals(EoS, TrLine, RegionS):
                 OUT[i, 2],
                 OUT[i, 3],
             )
-            f.write(
-                f"{TtH:5} {mbtH:5} {TtQ:5} {mbtQ:5} {eH:5} {nBH:5} {eQ:5} {nBQ:5} {T:5} {muB:5}\n"
-            )
+            f.write(f"{T:5} {muB:5} {eH:5} {nBH:5} {eQ:5} {nBQ:5} \n")
 
     print(f"Transition region data written to {RegionS}")
 
