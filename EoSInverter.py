@@ -151,6 +151,6 @@ elif Param["RunMode"] == 2:
             for i, job_script, rc in submit_failures:
                 lf.write(f"Tidx{i}\t{job_script}\treturn_code={rc}\n")
         print(
-            f"Pozor: {len(submit_failures)} job(ů) se neodeslalo. "
-            f"Detaily v {failure_log}."
+            f"Warning: {len(submit_failures)} job(s) failed to submit. "
+            f"Details in {failure_log}."
         )
